@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ExternalLink, MapPin, Plus, Trash2, Link2, LoaderCircle, ImageDown } from "lucide-react";
 import { categoryLabels, packingCategories, mapsUrl, placeSchema, type Category, type PackingItem, type Place, type ScheduleItem, type Trip, type TripState } from "@/lib/model";
 import { googleMapsLinkUrl, type GoogleMapsPlaceDraft } from "@/lib/maps-link";
+import { manualPlace, type ManualPlaceFields } from "@/lib/manual-place";
 import TripMap from "./trip-map";
 import { CategoryBadge, Modal, NavigationControls, PhotoCredit, PlaceImage, SubmitButton } from "./ui";
 
@@ -34,9 +35,16 @@ function GooglePlaceAdd({ defaultCategory = "sight", onSave, onClose, busy, onAu
   const [importing, setImporting] = useState(false);
   const [linkError, setLinkError] = useState("");
   const [photoWarning, setPhotoWarning] = useState("");
+  const [manual, setManual] = useState(false);
+  const [manualFields, setManualFields] = useState({ name: "", area: "", description: "", notes: "", lat: "", lng: "" });
+  const [manualError, setManualError] = useState("");
   const { error, submit } = useSave<Place>((place) => onSave(place));
   const locked = busy || importing;
   const ready = imported !== null && mapLink.trim() === imported.googleMapsUrl;
+  const manualDraft: ManualPlaceFields = { ...manualFields, id, category, favorite, mapLink };
+  let manualPreview: Place | null = null;
+  try { manualPreview = manualPlace({ ...manualDraft, name: manualDraft.name || "선택한 위치", mapLink: "" }); } catch {}
+  const updateManual = (key: keyof typeof manualFields, value: string) => { setManualFields((current) => ({ ...current, [key]: value })); setManualError(""); };
 
   async function importLink() {
     if (locked || !mapLink.trim()) return;
@@ -53,21 +61,36 @@ function GooglePlaceAdd({ defaultCategory = "sight", onSave, onClose, busy, onAu
         category, favorite, area: "", description: "", image: place?.image || "", photoCredit: place?.photoCredit, link: "", notes: "",
       });
       if (!parsed.success || !place?.googleMapsUrl) throw new Error("장소 이름과 정확한 위치를 확인할 수 없습니다. Google 지도에서 해당 장소의 공유 링크를 다시 복사해주세요.");
-      setImported(parsed.data); setMapLink(place.googleMapsUrl);
+      setImported(parsed.data); setMapLink(place.googleMapsUrl); setManual(false);
       setPhotoWarning(data.photoWarning || "");
     } catch (err) {
       setLinkError(err instanceof Error && !(err instanceof TypeError) ? err.message : "링크를 불러오지 못했습니다. 연결을 확인하고 다시 시도해주세요.");
     } finally { setImporting(false); }
   }
 
-  return <Modal title="Google 지도로 장소 추가" onClose={onClose} busy={locked}>
-    <EditorForm busy={locked} onSubmit={(e) => { e.preventDefault(); if (!locked && ready && imported) void submit({ ...imported, category, favorite }); }}>
-      <div className="maps-link-import"><label>Google 지도 링크<div className="maps-link-row"><input ref={linkInput} type="url" required aria-label="Google 지도 링크" maxLength={2048} value={mapLink} onChange={(e) => { setMapLink(e.target.value); setImported(null); setLinkError(""); }} placeholder="https://maps.app.goo.gl/…" autoFocus onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void importLink(); } }} /><button type="button" className="button secondary" disabled={locked || !mapLink.trim()} onClick={() => void importLink()}>{importing ? <LoaderCircle size={16} className="spin" /> : <Link2 size={16} />}{importing ? "불러오는 중" : "불러오기"}</button></div></label><ErrorMessage error={linkError} /></div>
-      {ready && imported && <section className="maps-place-preview" aria-label="불러온 장소"><div className="maps-place-preview-heading"><h3>{imported.name}</h3><a className="button secondary" href={imported.googleMapsUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} />Google 지도</a></div>{imported.image && <div className="import-photo"><PlaceImage src={imported.image} alt={imported.name} /></div>}<PhotoCredit credit={imported.photoCredit} /><TripMap compact points={[{ place: imported, key: imported.id, order: 1 }]} selected={imported.id} onSelect={() => {}} /></section>}
+  return <Modal title={manual ? "장소 직접 등록" : "Google 지도로 장소 추가"} onClose={onClose} busy={locked}>
+    <EditorForm busy={locked} onSubmit={(e) => {
+      e.preventDefault(); if (locked) return;
+      if (manual) { try { const place = manualPlace(manualDraft); setManualError(""); void submit(place); } catch (err) { setManualError(err instanceof Error ? err.message : "입력 정보를 확인해주세요."); } }
+      else if (ready && imported) void submit({ ...imported, category, favorite });
+    }}>
+      <div className="maps-link-import"><label>Google 지도 링크<div className="maps-link-row"><input ref={linkInput} type="url" required={!manual} aria-label="Google 지도 링크" maxLength={2048} value={mapLink} onChange={(e) => { setMapLink(e.target.value); setImported(null); setLinkError(""); setManualError(""); }} placeholder="https://maps.app.goo.gl/…" autoFocus onKeyDown={(e) => { if (e.key === "Enter" && !manual) { e.preventDefault(); void importLink(); } }} /><button type="button" className="button secondary" disabled={locked || !mapLink.trim()} onClick={() => void importLink()}>{importing ? <LoaderCircle size={16} className="spin" /> : <Link2 size={16} />}{importing ? "불러오는 중" : "불러오기"}</button></div></label><ErrorMessage error={linkError} /></div>
+      {!manual && linkError && <button type="button" className="button secondary" onClick={() => { setManual(true); setManualError(""); }}><Plus size={16} />직접 등록</button>}
+      {manual && <>
+        <label>장소 이름<input required maxLength={120} value={manualFields.name} onChange={(e) => updateManual("name", e.target.value)} autoFocus /></label>
+        <label>지역<input maxLength={100} value={manualFields.area} onChange={(e) => updateManual("area", e.target.value)} /></label>
+        <div className="map-field"><span>위치</span><TripMap compact baseOnly points={manualPreview ? [{ place: manualPreview, key: id, order: 1 }] : []} selected={manualPreview ? id : null} onSelect={() => {}} onPick={(lat, lng) => { if (!locked) { setManualFields((current) => ({ ...current, lat: lat.toFixed(6), lng: lng.toFixed(6) })); setManualError(""); } }} /></div>
+        <div className="form-row"><label>위도<input type="number" required min={-90} max={90} step="any" value={manualFields.lat} onChange={(e) => updateManual("lat", e.target.value)} /></label><label>경도<input type="number" required min={-180} max={180} step="any" value={manualFields.lng} onChange={(e) => updateManual("lng", e.target.value)} /></label></div>
+        <label>소개<textarea rows={2} maxLength={3000} value={manualFields.description} onChange={(e) => updateManual("description", e.target.value)} /></label>
+        <label>개인 메모<textarea rows={2} maxLength={3000} value={manualFields.notes} onChange={(e) => updateManual("notes", e.target.value)} /></label>
+        <ErrorMessage error={manualError} />
+        <button type="button" className="button secondary" onClick={() => setManual(false)}><Link2 size={16} />링크 자동 등록으로 돌아가기</button>
+      </>}
+      {!manual && ready && imported && <section className="maps-place-preview" aria-label="불러온 장소"><div className="maps-place-preview-heading"><h3>{imported.name}</h3><a className="button secondary" href={imported.googleMapsUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} />Google 지도</a></div>{imported.image && <div className="import-photo"><PlaceImage src={imported.image} alt={imported.name} /></div>}<PhotoCredit credit={imported.photoCredit} /><TripMap compact points={[{ place: imported, key: imported.id, order: 1 }]} selected={imported.id} onSelect={() => {}} /></section>}
       {ready && photoWarning && <p className="photo-warning" role="status">{photoWarning}</p>}
       <label>분류<select aria-label="분류" value={category} onChange={(e) => setCategory(e.target.value as Category)}>{Object.entries(categoryLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       <label className="checkbox-label"><input type="checkbox" checked={favorite} onChange={(e) => setFavorite(e.target.checked)} />즐겨찾기에 저장</label>
-      <ErrorMessage error={error} /><div className="form-actions"><button className="button secondary" type="button" onClick={onClose} disabled={locked}>취소</button><SubmitButton busy={busy} disabled={!ready || importing}>장소 등록</SubmitButton></div>
+      <ErrorMessage error={error} /><div className="form-actions"><button className="button secondary" type="button" onClick={onClose} disabled={locked}>취소</button><SubmitButton busy={busy} disabled={(!manual && !ready) || importing}>장소 등록</SubmitButton></div>
     </EditorForm>
   </Modal>;
 }

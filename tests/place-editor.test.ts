@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PlaceEditor } from "@/components/editors";
+import TripMap from "@/components/trip-map";
 import { createSeed } from "@/lib/seed";
 
 const props = {
@@ -12,6 +13,14 @@ const props = {
 };
 
 describe("place registration", () => {
+  it("does not load Google Maps in the manual fallback even when a Google key exists", () => {
+    vi.stubEnv("NEXT_PUBLIC_GOOGLE_MAPS_API_KEY", "test-key");
+    try {
+      const html = renderToStaticMarkup(createElement(TripMap, { baseOnly: true, points: [], selected: null, onSelect: () => {} }));
+      expect(html).toContain("오키나와 기본 지도");
+      expect(html).not.toContain(">Google 지도<");
+    } finally { vi.unstubAllEnvs(); }
+  });
   it("requires a Google Maps link instead of manual place fields for new places", () => {
     const html = renderToStaticMarkup(createElement(PlaceEditor, props));
     expect(html.match(/<input[^>]*aria-label="Google 지도 링크"[^>]*>/)?.[0]).toContain('required=""');

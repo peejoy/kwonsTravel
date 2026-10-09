@@ -15,6 +15,7 @@ type Props = {
   compact?: boolean;
   connectPoints?: boolean;
   markerKind?: "place" | "photo";
+  baseOnly?: boolean;
 };
 const center = { lat: 26.36, lng: 127.8 };
 
@@ -106,7 +107,7 @@ function BaseMap({ points, selected, onSelect, onPick, reset, onReady, connectPo
 }
 
 export default function TripMap(props: Props) {
-  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
+  const apiKey = props.baseOnly ? "" : process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
   const [provider, setProvider] = useState<"google" | "base">(apiKey ? "google" : "base");
   const [authError, setAuthError] = useState(false);
   const [reset, setReset] = useState(0);
