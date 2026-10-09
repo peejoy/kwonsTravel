@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CalendarDays, Camera, Check, CheckCircle2, Download, Heart, Images, ListChecks, LoaderCircle, LogOut, MapPin, Plane, Plus, Settings, Share2, Users, Utensils, X, LockKeyhole } from "lucide-react";
+import { CalendarDays, Camera, Check, CheckCircle2, Download, Heart, Images, ListChecks, LoaderCircle, LogOut, MapPin, MoreHorizontal, Plane, Plus, Settings, Share2, Users, Utensils, X, LockKeyhole } from "lucide-react";
 import { mergeEditedRecord, parseTripState, placeSchema, removePlace, tripDates, type Category, type PackingItem, type Place, type ScheduleItem, type Trip, type TripState } from "@/lib/model";
 import { DeleteConfirm, ImportConfirm, PackingEditor, PlaceDetail, PlaceEditor, ScheduleEditor, TripEditor } from "./editors";
 import { IconButton, Modal } from "./ui";
@@ -20,6 +20,24 @@ const nav = [
   { id: "packing" as const, label: "준비물", icon: ListChecks },
   { id: "album" as const, label: "여행 앨범", icon: Images },
 ];
+const mobileNav = [
+  { id: "itinerary" as const, label: "일정", icon: CalendarDays },
+  { id: "places" as const, label: "장소", icon: MapPin },
+  { id: "album" as const, label: "앨범", icon: Images },
+  { id: "packing" as const, label: "준비물", icon: ListChecks },
+  { id: "settings" as const, label: "더보기", icon: MoreHorizontal },
+];
+function daysUntil(startDate: string): number | null {
+  const start = new Date(`${startDate}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((start.getTime() - today.getTime()) / 86400000);
+}
+function ddayLabel(startDate?: string): string {
+  const days = startDate ? daysUntil(startDate) : null;
+  if (days === null) return "";
+  return days > 0 ? `출발까지 D-${days}` : days === 0 ? "오늘 출발" : "여행 중";
+}
 function friendlyError(error: unknown, fallback: string): string {
   return error instanceof Error && /[가-힣]/.test(error.message) ? error.message : fallback;
 }
@@ -240,22 +258,26 @@ export default function Planner() {
   const currentView = view === "settings" ? { label: "여행 설정" } : nav.find((n) => n.id === view)!;
   const closeEditor = () => { if (!busy) setEditor(null); };
   const addPlace = () => setEditor({ kind: "place", category: view === "food" || view === "photo" ? view : "sight" });
+  const primaryAction = view === "settings" || view === "album" ? null : { label: view === "itinerary" ? "일정 추가" : view === "packing" ? "준비물 추가" : "장소 추가", run: () => view === "itinerary" ? setEditor({ kind: "schedule" }) : view === "packing" ? setEditor({ kind: "packing" }) : addPlace() };
+  const dday = ddayLabel(state.trip.startDate);
   return <div className="app-shell">
     <aside className="sidebar"><a className="brand" href="/" aria-label="오키나와 여행 홈"><span className="brand-icon"><Plane size={24} strokeWidth={1.7} /></span><span>Okinawa<span className="brand-subtitle">우리 가족 여행</span></span></a>
       <div className="sidebar-divider" /><div className="nav-heading">여행 노트</div><nav className="side-nav" aria-label="주 메뉴">{nav.map(({ id, label, icon: Icon }) => <button key={id} aria-label={label} className={view === id ? "active" : ""} onClick={() => setView(id)}><Icon size={19} strokeWidth={1.8} /><span>{label}</span>{id === "packing" && <span className="nav-count">{done}/{state.packing.length}</span>}{id === "places" && <span className="nav-count">{state.places.length}</span>}</button>)}</nav>
       <div className="sidebar-trip"><img src="/photos/american-village.jpg" alt="오키나와 아메리칸 빌리지" /><div className="sidebar-trip-copy"><span>이번 여행</span><strong>오키나와</strong><p>{state.trip.days}일의 기록{state.trip.travelers ? ` · ${state.trip.travelers}명` : ""}</p></div></div>
       <div className="sidebar-bottom"><button className={view === "settings" ? "sidebar-settings active" : "sidebar-settings"} onClick={() => setView("settings")}><Settings size={18} />여행 설정</button><span className="storage-status"><span className={`status-dot ${session.mode}`} />{session.mode === "shared" ? "가족과 공유 중" : "이 컴퓨터에 저장"}</span><a className="credits-link" href="/credits" target="_blank" rel="noopener noreferrer">사진 출처</a></div>
     </aside>
-    <main className="main-content"><header className="main-header"><div><div className="trip-label"><span className="destination-dot" />Japan, Okinawa</div><h1>{state.trip.title}</h1><div className="trip-meta"><span><CalendarDays size={14} />{tripDates(state.trip)}</span><span><Users size={14} />{state.trip.travelers ? `${state.trip.travelers}명` : "가족 여행"}</span><IconButton label="여행 정보 수정" onClick={() => setEditor({ kind: "trip" })}><Settings size={14} /></IconButton></div></div><div className="header-actions"><span className="save-indicator">{busy ? <LoaderCircle size={14} className="spin" /> : <CheckCircle2 size={14} />}{busy ? "저장 중" : "저장됨"}</span><IconButton label="여행 파일 다운로드" onClick={exportTrip}><Download size={18} /></IconButton><button className="button secondary share-button" disabled={session.mode !== "shared"} title={session.mode === "local" ? "가족 공유 연결 후 사용" : "가족 공유 링크 복사"} onClick={() => void share()}><Share2 size={16} />가족 공유</button></div></header>
-      <div className="view-header"><div><h2>{currentView.label}</h2><span className="view-count">{view === "itinerary" ? `${state.trip.days}일 · ${state.schedule.length}개 일정` : view === "packing" ? `${done} / ${state.packing.length}개 준비 완료` : view === "settings" ? "우리 가족의 여행 정보" : view === "album" ? "가족의 여행사진" : view === "places" ? `${state.places.length}개 장소 · 즐겨찾기 ${favorites}개` : `${state.places.filter((p) => p.category === view).length}개 장소`}</span></div>{view !== "settings" && view !== "album" && <button className="button primary" onClick={() => view === "itinerary" ? setEditor({ kind: "schedule" }) : view === "packing" ? setEditor({ kind: "packing" }) : addPlace()}><Plus size={16} />{view === "itinerary" ? "일정 추가" : view === "packing" ? "준비물 추가" : "장소 추가"}</button>}</div>
+    <main className={`main-content view-${view}`}><header className="main-header"><div><div className="trip-label"><span className="destination-dot" /><span className="trip-place">Japan, Okinawa</span>{dday && <span className="dday">{dday}</span>}</div><h1>{state.trip.title}</h1><div className="trip-meta"><span><CalendarDays size={14} />{tripDates(state.trip)}</span><span><Users size={14} />{state.trip.travelers ? `${state.trip.travelers}명` : "가족 여행"}</span><IconButton label="여행 정보 수정" onClick={() => setEditor({ kind: "trip" })}><Settings size={14} /></IconButton></div></div><div className="header-actions"><span className="save-indicator">{busy ? <LoaderCircle size={14} className="spin" /> : <CheckCircle2 size={14} />}{busy ? "저장 중" : "저장됨"}</span><IconButton label="여행 파일 다운로드" onClick={exportTrip}><Download size={18} /></IconButton><button className="button secondary share-button" disabled={session.mode !== "shared"} title={session.mode === "local" ? "가족 공유 연결 후 사용" : "가족 공유 링크 복사"} onClick={() => void share()}><Share2 size={16} />가족 공유</button></div></header>
+      <div className="view-header"><div><h2>{currentView.label}</h2><span className="view-count">{view === "itinerary" ? `${state.trip.days}일 · ${state.schedule.length}개 일정` : view === "packing" ? `${done} / ${state.packing.length}개 준비 완료` : view === "settings" ? "우리 가족의 여행 정보" : view === "album" ? "가족의 여행사진" : view === "places" ? `${state.places.length}개 장소 · 즐겨찾기 ${favorites}개` : `${state.places.filter((p) => p.category === view).length}개 장소`}</span></div>{primaryAction && <button className="button primary" onClick={primaryAction.run}><Plus size={16} />{primaryAction.label}</button>}</div>
       {view === "album" && <AlbumView places={state.places} onAuthRequired={() => setSession((current) => current && { ...current, authenticated: false })} />}
       {view === "itinerary" && <ItineraryView state={state} day={day} setDay={(d) => { setDay(d); setSelected(null); }} selected={selected} setSelected={setSelected} busy={busy} onEdit={(value) => setEditor({ kind: "schedule", value })} onAdd={() => setEditor({ kind: "schedule" })} onToggle={(id) => quickChange((s) => ({ ...s, schedule: s.schedule.map((i) => i.id === id ? { ...i, completed: !i.completed } : i) }))} onMove={moveSchedule} onDetail={setDetail} onDelete={(entry, name) => setDeletion({ kind: "schedule", id: entry.id, title: name })} />}
-      {(view === "places" || view === "food" || view === "photo") && <PlacesView key={view} state={state} view={view} onDetail={setDetail} onAdd={addPlace} busy={busy} onFavorite={(id) => quickChange((s) => ({ ...s, places: s.places.map((p) => p.id === id ? { ...p, favorite: !p.favorite } : p) }))} onSchedule={(placeId) => setEditor({ kind: "schedule", placeId })} onPhotos={session.mode === "local" ? (places) => void populatePhotos(places) : undefined} photoProgress={photoProgress} />}
+      {(view === "places" || view === "food" || view === "photo") && <PlacesView key={view} state={state} view={view} onDetail={setDetail} onAdd={addPlace} busy={busy} onFavorite={(id) => quickChange((s) => ({ ...s, places: s.places.map((p) => p.id === id ? { ...p, favorite: !p.favorite } : p) }))} onSchedule={(placeId) => setEditor({ kind: "schedule", placeId })} onPhotos={session.mode === "local" ? (places) => void populatePhotos(places) : undefined} photoProgress={photoProgress} onViewChange={setView} />}
       {view === "packing" && <PackingView state={state} busy={busy} onToggle={(id) => quickChange((s) => ({ ...s, packing: s.packing.map((i) => i.id === id ? { ...i, done: !i.done } : i) }))} onEdit={(value) => setEditor({ kind: "packing", value })} onAdd={() => setEditor({ kind: "packing" })} onDelete={(item) => setDeletion({ kind: "packing", id: item.id, title: item.label })} />}
       {view === "settings" && <SettingsView state={state} mode={session.mode} onEdit={() => setEditor({ kind: "trip" })} onExport={exportTrip} onImport={(file) => void openImport(file)} onLogout={() => void logout()} onDeletePhotos={() => setPhotoDeletion(true)} busy={busy} />}
+      {view === "settings" && <div className="mobile-more-links"><span className="storage-status"><span className={`status-dot ${session.mode}`} />{session.mode === "shared" ? "가족과 공유 중" : "이 컴퓨터에 저장"}</span><a className="credits-link" href="/credits" target="_blank" rel="noopener noreferrer">사진 출처</a></div>}
       <footer className="main-footer"><span>우리 가족만의 여행 기록</span><span>Okinawa, Japan</span></footer>
     </main>
-    <nav className="mobile-nav" aria-label="모바일 메뉴">{nav.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)} aria-label={label}><Icon size={19} /><span>{id === "itinerary" ? "일정" : id === "places" ? "장소" : label}</span></button>)}</nav>
+    {primaryAction && <button className="fab" onClick={primaryAction.run}><Plus size={21} />{primaryAction.label}</button>}
+    <nav className="mobile-nav" aria-label="모바일 메뉴">{mobileNav.map(({ id, label, icon: Icon }) => { const active = view === id || (id === "places" && (view === "food" || view === "photo")); return <button key={id} className={active ? "active" : ""} aria-current={active ? "page" : undefined} onClick={() => setView(id)} aria-label={label}><Icon size={22} strokeWidth={active ? 2.2 : 1.8} /><span>{label}</span></button>; })}</nav>
     {notice && <div role={notice.error ? "alert" : "status"} className={`toast${notice.error ? " error" : ""}`}><span>{notice.error ? <X size={17} /> : <Check size={17} />}{notice.text}</span><IconButton label="알림 닫기" onClick={() => setNotice(null)}><X size={16} /></IconButton></div>}
     {editor?.kind === "place" && <PlaceEditor value={editor.value} defaultCategory={editor.category} onSave={savePlace} onClose={closeEditor} busy={busy} onAuthRequired={() => setSession((current) => current && { ...current, authenticated: false })} />}
     {editor?.kind === "schedule" && <ScheduleEditor value={editor.value} placeId={editor.placeId} state={state} day={day} onSave={saveSchedule} onClose={closeEditor} busy={busy} />}
