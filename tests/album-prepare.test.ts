@@ -27,4 +27,21 @@ describe("phone photo preparation", () => {
     vi.stubGlobal("createImageBitmap", vi.fn(async () => { throw new Error("decode"); }));
     await expect(preparePhoto(new File(["heic"], "test.heic", { type: "image/heic" }))).rejects.toThrow(/HEIC/);
   });
+  it("tries browser Image decoding when bitmap decoding rejects HEIC", async () => {
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => { throw new Error("bitmap unsupported"); }));
+    vi.stubGlobal("Image", class { src = ""; naturalWidth = 1200; naturalHeight = 800; async decode() {} });
+    vi.stubGlobal("document", { createElement: () => ({ width: 0, height: 0, getContext: () => ({ drawImage: vi.fn() }), toBlob: (callback: (b: Blob) => void) => callback(new Blob(["jpeg"], { type: "image/jpeg" })) }) });
+    const photo = await preparePhoto(new File(["heic"], "test.heic", { type: "image/heic" }));
+    expect(photo.blob.type).toBe("image/jpeg"); URL.revokeObjectURL(photo.previewUrl);
+  });
+  it("reduces JPEG quality within bounds and rejects an impossible upload size", async () => {
+    const close = vi.fn(); let attempts = 0; let impossible = false;
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 100, height: 100, close })));
+    vi.stubGlobal("document", { createElement: () => ({ width: 0, height: 0, getContext: () => ({ drawImage: vi.fn() }), toBlob: (callback: (b: Blob) => void) => { attempts++; callback(new Blob([new Uint8Array(impossible || attempts === 1 ? 3 * 1024 * 1024 + 1 : 10)], { type: "image/jpeg" })); } }) });
+    const photo = await preparePhoto(new File(["jpeg"], "test.jpg", { type: "image/jpeg" }));
+    expect(attempts).toBe(2); URL.revokeObjectURL(photo.previewUrl);
+    impossible = true; attempts = 0;
+    await expect(preparePhoto(new File(["jpeg"], "test.jpg", { type: "image/jpeg" }))).rejects.toThrow(/3MB/);
+    expect(attempts).toBe(4); expect(close).toHaveBeenCalledTimes(2);
+  });
 });

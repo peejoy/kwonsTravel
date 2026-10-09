@@ -4,11 +4,11 @@ import { Check, ImagePlus, LoaderCircle, Pause, RotateCw, X } from "lucide-react
 import type { Place } from "@/lib/model";
 import { preparePhoto, type PreparedPhoto } from "@/lib/album/prepare";
 import { SELECTION_LIMIT, photoMetadataSchema, type AlbumPhoto, type UploadReservation } from "@/lib/album/model";
-import { albumRequest, uploadPrepared } from "@/lib/album/client";
+import { cancelReservation, uploadPrepared } from "@/lib/album/client";
 import { IconButton, Modal } from "../ui";
 import { MetadataFields } from "./metadata-fields";
 type Draft = PreparedPhoto & { key: string; name: string; status: "ready" | "uploading" | "done" | "error"; error?: string; reservation?: UploadReservation };
-export default function UploadEditor({ places, onClose, onAdded, onError }: { places: Place[]; onClose: () => void; onAdded: (photo: AlbumPhoto) => void; onError: (error: unknown) => void }) {
+export default function UploadEditor({ places, onClose, onAdded, onError, onCleanupPending }: { places: Place[]; onClose: () => void; onAdded: (photo: AlbumPhoto) => void; onError: (error: unknown) => void; onCleanupPending: () => void }) {
   const [drafts, setDrafts] = useState<Draft[]>([]); const [selected, setSelected] = useState("");
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const refs = useRef<Draft[]>([]); const stop = useRef(false); const mounted = useRef(true); const input = useRef<HTMLInputElement>(null);
@@ -25,10 +25,11 @@ export default function UploadEditor({ places, onClose, onAdded, onError }: { pl
     }
     if (input.current) input.current.value = ""; if (mounted.current) setBusy(false);
   }
-  async function upload() {
+  async function upload(onlyKey?: string) {
     if (busy) return; setBusy(true); setError(""); stop.current = false;
     for (const original of refs.current) {
       if (stop.current) break; if (original.status === "done") continue;
+      if (onlyKey && original.key !== onlyKey) continue;
       try {
         photoMetadataSchema.parse(original.metadata); update(original.key, { status: "uploading", error: "" }); setSelected(original.key);
         const photo = await uploadPrepared(original.blob, original.metadata, original.reservation, (reservation) => update(original.key, { reservation }));
@@ -40,11 +41,15 @@ export default function UploadEditor({ places, onClose, onAdded, onError }: { pl
     }
     if (mounted.current) setBusy(false);
   }
-  async function discard(draft: Draft) {
-    if (draft.reservation && draft.status !== "done") await albumRequest(`/api/album/${draft.reservation.id}`, "DELETE", { revision: draft.reservation.revision }).catch(onError);
+  async function discard(draft: Draft): Promise<boolean> {
+    if (draft.reservation && draft.status !== "done") {
+      try { const result = await cancelReservation(draft.reservation); if (result.photo) onAdded(result.photo); if (result.cleanupPending) onCleanupPending(); }
+      catch (err) { setError(err instanceof Error ? err.message : "사진 정리를 다시 시도해주세요."); onError(err); return false; }
+    }
     URL.revokeObjectURL(draft.previewUrl); replace(refs.current.filter((d) => d.key !== draft.key)); setSelected(refs.current[0]?.key || "");
+    return true;
   }
-  async function close() { if (busy) return; setBusy(true); for (const d of [...refs.current]) if (d.status !== "done") await discard(d); onClose(); }
+  async function close() { if (busy) return; setBusy(true); for (const d of [...refs.current]) if (d.status !== "done" && !await discard(d)) { setBusy(false); return; } onClose(); }
   const active = drafts.find((d) => d.key === selected); const remaining = drafts.filter((d) => d.status !== "done").length;
   return <Modal title="여행사진 올리기" busy={busy} onClose={() => void close()}>
     <div className="album-upload">
@@ -53,8 +58,8 @@ export default function UploadEditor({ places, onClose, onAdded, onError }: { pl
       {error && <p role="alert" className="form-error">{error}</p>}
       {!!drafts.length && <div className="album-draft-strip">{drafts.map((d) => <button key={d.key} className={selected === d.key ? "active" : ""} disabled={busy} onClick={() => setSelected(d.key)} aria-label={d.name}><img src={d.previewUrl} alt={d.name} />{d.status === "done" && <Check size={16} />}{d.status === "error" && <span className="album-draft-error">!</span>}</button>)}</div>}
       {active && <><img className="album-upload-preview" src={active.previewUrl} alt={active.name} /><div className="album-file-heading"><span>{active.name}</span><IconButton label="선택 사진 제외" disabled={busy} onClick={() => void discard(active)}><X size={16} /></IconButton></div>
-        {active.error && <p className="form-error" role="alert">{active.error}</p>}
-        <fieldset className="editor-form album-metadata" disabled={busy || active.status === "done" || !!active.reservation}><MetadataFields value={active.metadata} places={places} onChange={(metadata) => update(active.key, { metadata })} /></fieldset>
+        {active.error && <div className="album-notice"><p className="form-error" role="alert">{active.error}</p><button type="button" className="button secondary" disabled={busy} onClick={() => void upload(active.key)}><RotateCw size={16} />이 사진 다시 업로드</button></div>}
+        <fieldset className="editor-form album-metadata" disabled={busy || active.status === "done" || !!active.reservation}><MetadataFields value={active.metadata} places={places} disabled={busy || active.status === "done" || !!active.reservation} onChange={(metadata) => update(active.key, { metadata })} /></fieldset>
       </>}
       {!drafts.length && <div className="album-empty"><ImagePlus size={32} /><p>선택한 사진이 없습니다.</p></div>}
       <div className="form-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => void close()}>{remaining ? "취소" : "완료"}</button>{busy ? <button type="button" className="button secondary" onClick={() => { stop.current = true; }}><Pause size={16} />업로드 중단</button> : !!remaining && <button type="button" className="button primary" onClick={() => void upload()}><RotateCw size={16} />{drafts.some((d) => d.status === "error") ? "다시 업로드" : `${remaining}장 업로드`}</button>}{busy && <LoaderCircle size={18} className="spin" />}</div>

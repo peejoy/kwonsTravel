@@ -1,4 +1,3 @@
-import exifr from "exifr";
 import { emptyMetadata, photoMetadataSchema, SOURCE_LIMIT, UPLOAD_LIMIT, type PhotoMetadata } from "./model";
 export type PreparedPhoto = { blob: Blob; previewUrl: string; metadata: PhotoMetadata };
 export function normalizeExif(raw: Record<string, unknown> | null): PhotoMetadata {
@@ -18,8 +17,10 @@ export function normalizeExif(raw: Record<string, unknown> | null): PhotoMetadat
 async function decode(file: File): Promise<{ source: CanvasImageSource; width: number; height: number; close: () => void }> {
   try {
     if (typeof createImageBitmap === "function") {
-      const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
-      return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() };
+      try {
+        const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+        return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() };
+      } catch { /* Some phone browsers can decode HEIC via Image but not bitmap. */ }
     }
     const url = URL.createObjectURL(file);
     try {
@@ -33,6 +34,7 @@ async function decode(file: File): Promise<{ source: CanvasImageSource; width: n
 export async function preparePhoto(file: File): Promise<PreparedPhoto> {
   if (!file.size || file.size > SOURCE_LIMIT) throw new Error("사진 원본 크기는 30MB 이하로 선택해주세요.");
   if (!/^image\/(jpeg|png|webp|heic|heif)$/.test(file.type) && !/\.(jpe?g|png|webp|heic|heif)$/i.test(file.name)) throw new Error("지원하지 않는 사진 형식입니다.");
+  const { default: exifr } = await import("exifr");
   const metadata = normalizeExif(await exifr.parse(file, { reviveValues: false }).catch(() => null));
   const image = await decode(file);
   try {

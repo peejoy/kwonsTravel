@@ -10,6 +10,7 @@ const rowSchema = z.object({
   lat: z.number().nullable(), lng: z.number().nullable(), location_source: z.enum(["exif", "manual", "place", "none"]),
   revision: revisionSchema, status: z.enum(["pending", "ready", "deleting"]), created_at: z.string(), updated_at: z.string(),
   upload_expires_at: z.string(), lease_id: z.string().nullable(), lease_expires_at: z.string().nullable(),
+  temporary_cleanup_pending: z.boolean().default(false),
 });
 type Row = z.infer<typeof rowSchema>;
 type Client = SupabaseClient;
@@ -69,7 +70,7 @@ async function permission(client: Client, record: Row): Promise<UploadReservatio
 export async function reservePhoto(value: PhotoMetadata): Promise<UploadReservation> {
   return guarded(async (client) => {
     const id = randomUUID(); const paths = photoPaths(id); const timestamp = now();
-    const record: Row = { id, trip_id: "okinawa", ...metadataColumns(value), revision: 0, status: "pending", created_at: timestamp, updated_at: timestamp, upload_expires_at: future(3 * 3600), lease_id: null, lease_expires_at: null };
+    const record: Row = { id, trip_id: "okinawa", ...metadataColumns(value), revision: 0, status: "pending", created_at: timestamp, updated_at: timestamp, upload_expires_at: future(3 * 3600), lease_id: null, lease_expires_at: null, temporary_cleanup_pending: false };
     await privateBucket(client);
     checked(await table(client).insert({ ...record, temporary_path: paths.temporary, display_path: paths.display, thumbnail_path: paths.thumbnail }).retry(false));
     return permission(client, record);
@@ -78,7 +79,7 @@ export async function reservePhoto(value: PhotoMetadata): Promise<UploadReservat
 export async function renewUpload(id: string, revision: number): Promise<UploadReservation> {
   return guarded(async (client) => {
     revisionSchema.parse(revision);
-    const data = checked(await table(client).update({ upload_expires_at: future(3 * 3600), updated_at: now(), revision: revision + 1 })
+    const data = checked(await table(client).update({ upload_expires_at: future(3 * 3600), updated_at: now() })
       .eq("trip_id", "okinawa").eq("id", idSchema.parse(id)).eq("revision", revision).eq("status", "pending")
       .or(`lease_expires_at.is.null,lease_expires_at.lt.${now()}`).select("*").retry(false));
     if (!data?.[0]) throw conflict();
@@ -106,7 +107,7 @@ export async function finalizePhoto(id: string, revision: number): Promise<Album
       for (const [path, bytes] of [[paths.display, outputs.display], [paths.thumbnail, outputs.thumbnail]] as const) {
         checked(await client.storage.from(BUCKET).upload(path, bytes, { upsert: true, contentType: "image/jpeg", cacheControl: "300" }));
       }
-      const published = checked(await table(client).update({ status: "ready", revision: revision + 1, updated_at: now(), lease_id: null, lease_expires_at: null })
+      const published = checked(await table(client).update({ status: "ready", revision: revision + 1, updated_at: now(), lease_id: null, lease_expires_at: null, temporary_cleanup_pending: true })
         .eq("trip_id", "okinawa").eq("id", id).eq("revision", revision).eq("status", "pending").eq("lease_id", lease).select("*").retry(false));
       if (!published?.[0]) throw conflict();
       await client.storage.from(BUCKET).remove([paths.temporary]);
@@ -119,7 +120,10 @@ export async function finalizePhoto(id: string, revision: number): Promise<Album
 export async function listPhotos(cursor: string | null): Promise<AlbumPage> {
   return guarded(async (client) => {
     let query = table(client).select("*").eq("trip_id", "okinawa").eq("status", "ready").order("created_at", { ascending: false }).order("id", { ascending: false }).limit(41);
-    if (cursor) { const c = decodeCursor(cursor); query = query.or(`created_at.lt.${c.createdAt},and(created_at.eq.${c.createdAt},id.lt.${c.id})`); }
+    if (cursor) {
+      let c; try { c = decodeCursor(cursor); } catch { throw new AlbumError("사진 목록 위치를 확인해주세요.", 400); }
+      query = query.or(`created_at.lt.${c.createdAt},and(created_at.eq.${c.createdAt},id.lt.${c.id})`);
+    }
     const records = z.array(rowSchema).parse(checked(await query.retry(false)));
     const page = records.slice(0, 40);
     return { photos: await Promise.all(page.map((p) => signedPhoto(client, p))), nextCursor: records.length > 40 ? encodeCursor({ createdAt: page[39].created_at, id: page[39].id }) : null };
@@ -149,15 +153,23 @@ export async function deletePhoto(id: string, revision: number): Promise<{ clean
     if (!data?.[0]) throw conflict(); return { cleanupPending: !await removeRecord(client, rowSchema.parse(data[0])) };
   });
 }
-export async function cleanupPhotos(): Promise<{ removed: number; pending: number }> {
+export async function cleanupPhotos(): Promise<{ removed: number; pending: number; hasMore: boolean }> {
   return guarded(async (client) => {
     const cutoff = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-    const records = z.array(rowSchema).parse(checked(await table(client).select("*").eq("trip_id", "okinawa").or(`status.eq.deleting,and(status.eq.pending,updated_at.lt.${cutoff})`).order("updated_at").limit(100).retry(false)));
-    let removed = 0, pending = 0;
-    for (const record of records) {
-      if (record.status === "ready" || (record.status === "pending" && record.updated_at >= cutoff)) continue;
+    const records = z.array(rowSchema).parse(checked(await table(client).select("*").eq("trip_id", "okinawa").or(`status.eq.deleting,and(status.eq.pending,updated_at.lt.${cutoff}),and(status.eq.ready,temporary_cleanup_pending.eq.true,upload_expires_at.lt.${now()})`).order("updated_at").limit(101).retry(false)));
+    const hasMore = records.length > 100; let removed = 0, pending = hasMore ? 1 : 0;
+    for (const record of records.slice(0, 100)) {
+      if (record.status === "ready") {
+        if (!record.temporary_cleanup_pending || new Date(record.upload_expires_at).valueOf() > Date.now()) continue;
+        const result = await client.storage.from(BUCKET).remove([photoPaths(record.id).temporary]);
+        if (result.error) { pending++; continue; }
+        const updated = await table(client).update({ temporary_cleanup_pending: false }).eq("trip_id", "okinawa").eq("id", record.id).eq("status", "ready").eq("revision", record.revision).retry(false);
+        if (updated.error) pending++; else removed++;
+        continue;
+      }
+      if (record.status === "pending" && record.updated_at >= cutoff) continue;
       try { const result = await deletePhoto(record.id, record.revision); if (result.cleanupPending) pending++; else removed++; } catch { pending++; }
     }
-    return { removed, pending };
+    return { removed, pending, hasMore };
   });
 }

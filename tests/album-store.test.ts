@@ -1,23 +1,26 @@
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import sharp from "sharp";
-import { reservePhoto, listPhotos, finalizePhoto, updatePhoto, deletePhoto, cleanupPhotos, getPhoto } from "@/lib/album/store";
+import { reservePhoto, renewUpload, listPhotos, finalizePhoto, updatePhoto, deletePhoto, cleanupPhotos, getPhoto } from "@/lib/album/store";
 import { emptyMetadata } from "@/lib/album/model";
 type Row = Record<string, unknown>;
 let rows: Row[]; let objects: Map<string, Uint8Array>; let failRemove: boolean; let deletedDuringDownload: boolean;
+let failSign: boolean;
 beforeEach(() => {
-  rows = []; objects = new Map(); failRemove = false; deletedDuringDownload = false;
+  rows = []; objects = new Map(); failRemove = false; deletedDuringDownload = false; failSign = false;
   vi.stubEnv("SUPABASE_URL", "https://album.example"); vi.stubEnv("SUPABASE_SECRET_KEY", "test-secret");
   vi.stubGlobal("fetch", async (input: string | URL | Request, init: RequestInit = {}) => {
     const url = new URL(String(input)); const method = init.method || "GET";
     if (url.pathname === "/storage/v1/bucket/family-travel-photos") return Response.json({ id: "family-travel-photos", public: false });
     if (url.pathname === "/rest/v1/family_album") {
-      const matched = rows.filter(r => ["id", "revision", "status", "lease_id", "trip_id"].every(k => !url.searchParams.has(k) || url.searchParams.get(k) === `eq.${r[k]}`));
+      const matched = rows.filter(r => ["id", "revision", "status", "lease_id", "trip_id"].every(k => !url.searchParams.has(k) || url.searchParams.get(k) === `eq.${r[k]}`)
+        && (!(url.searchParams.get("or") || "").includes("lease_expires_at.is.null") || r.lease_expires_at === null || new Date(String(r.lease_expires_at)).valueOf() < Date.now()));
       if (method === "POST") { const row = JSON.parse(String(init.body)); rows.push(row); return Response.json([row]); }
       if (method === "PATCH") { const update = JSON.parse(String(init.body)); matched.forEach(r => Object.assign(r, update)); return Response.json(matched); }
       if (method === "DELETE") { rows = rows.filter(r => !matched.includes(r)); return Response.json(matched); }
       const limit = Number(url.searchParams.get("limit") || 100); return Response.json(matched.slice(0, limit));
     }
     if (url.pathname.startsWith("/storage/v1/object/upload/sign/")) {
+      if (failSign) return Response.json({ message: "synthetic signing error" }, { status: 500 });
       return Response.json({ url: `/object/upload/sign/family-travel-photos/key?token=${Buffer.from("{}").toString("base64url")}.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now()/1000)+7200 })).toString("base64url")}.sig` });
     }
     if (url.pathname.startsWith("/storage/v1/object/sign/")) return Response.json({ signedURL: "/object/sign/family-travel-photos/photo?token=test" });
@@ -78,4 +81,39 @@ it("keeps cancellation tombstones until signed upload permissions expire", async
   objects.set(`okinawa/${r.id}/temporary.jpg`, new Uint8Array([1]));
   rows[0].upload_expires_at = "2020-01-01T00:00:00.000Z";
   await cleanupPhotos(); expect(objects.size).toBe(0); expect(rows).toHaveLength(0);
+});
+it("recovers renewal after signing failed without losing the reservation revision", async () => {
+  const r = await pending(); failSign = true;
+  await expect(renewUpload(r.id, r.revision)).rejects.toThrow(); failSign = false;
+  expect((await renewUpload(r.id, r.revision)).revision).toBe(r.revision);
+  expect((await deletePhoto(r.id, r.revision)).cleanupPending).toBe(true);
+});
+it("cleans a ready photo's late temporary upload without deleting the display", async () => {
+  const r = await pending(); failRemove = true;
+  await finalizePhoto(r.id, r.revision); failRemove = false;
+  rows[0].upload_expires_at = "2020-01-01T00:00:00.000Z";
+  await cleanupPhotos();
+  expect(objects.has(`okinawa/${r.id}/temporary.jpg`)).toBe(false);
+  expect(objects.has(`okinawa/${r.id}/display.jpg`)).toBe(true);
+  expect(rows[0].status).toBe("ready");
+});
+it("reports more cleanup work when a batch leaves another tombstone", async () => {
+  const r = await pending(); const sample = { ...rows[0], status: "deleting", upload_expires_at: "2020-01-01T00:00:00.000Z" };
+  rows = Array.from({ length: 101 }, (_, i) => ({ ...sample, id: `11111111-1111-4111-8111-${String(i).padStart(12, "0")}` }));
+  const result = await cleanupPhotos(); expect(result.pending).toBeGreaterThan(0); expect(rows).toHaveLength(1);
+  await cleanupPhotos(); expect(rows).toHaveLength(0);
+});
+it("allows only one concurrent finalize lease to publish a reservation", async () => {
+  const r = await pending();
+  const results = await Promise.allSettled([finalizePhoto(r.id, r.revision), finalizePhoto(r.id, r.revision)]);
+  expect(results.filter((p) => p.status === "fulfilled")).toHaveLength(1);
+  expect(rows[0].status).toBe("ready"); expect(rows[0].revision).toBe(1);
+});
+it("returns a continuation cursor without dropping the 41st photo", async () => {
+  const r = await pending(); await finalizePhoto(r.id, r.revision); const sample = { ...rows[0] };
+  rows = Array.from({ length: 41 }, (_, i) => ({ ...sample, id: `11111111-1111-4111-8111-${String(i).padStart(12, "0")}` }));
+  const page = await listPhotos(null); expect(page.photos).toHaveLength(40); expect(page.nextCursor).not.toBeNull();
+});
+it("rejects malformed cursors as invalid input rather than a storage outage", async () => {
+  await expect(listPhotos("not-a-valid-cursor")).rejects.toMatchObject({ status: 400 });
 });

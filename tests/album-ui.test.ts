@@ -1,9 +1,10 @@
-import { createElement } from "react";
+import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 import AlbumView from "@/components/album/album-view";
-import { uploadPrepared } from "@/lib/album/client";
+import { cancelReservation, uploadPrepared } from "@/lib/album/client";
 import { emptyMetadata } from "@/lib/album/model";
+import { MetadataFields } from "@/components/album/metadata-fields";
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 it("offers album upload separately from place registration", () => {
   const html = renderToStaticMarkup(createElement(AlbumView, { places: [], onAuthRequired: () => {} }));
@@ -26,4 +27,21 @@ it("rejects an upload permission to an unrelated host", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({ id: "11111111-1111-4111-8111-111111111111", revision: 0, uploadUrl: "https://evil.example/image", uploadExpiresAt: "2099-01-01T00:00:00Z" })));
   await expect(uploadPrepared(new Blob(["jpeg"]), emptyMetadata)).rejects.toThrow(/업로드/);
   expect(fetch).toHaveBeenCalledTimes(1);
+});
+it("reconciles a lost finalize response before cancelling a completed photo", async () => {
+  const fetcher = vi.fn(async () => Response.json({ photo: { id: "ready-photo" } })); vi.stubGlobal("fetch", fetcher);
+  expect(await cancelReservation({ id: "11111111-1111-4111-8111-111111111111", revision: 0, uploadUrl: "", uploadExpiresAt: "" })).toEqual({ photo: { id: "ready-photo" } });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+it("keeps cancellation errors retryable instead of acknowledging deletion", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ error: "pending" }, { status: 404 })).mockResolvedValueOnce(Response.json({ error: "사진 정리 실패" }, { status: 503 })));
+  await expect(cancelReservation({ id: "11111111-1111-4111-8111-111111111111", revision: 0, uploadUrl: "", uploadExpiresAt: "" })).rejects.toMatchObject({ status: 503 });
+});
+it("ignores map picks while upload metadata is locked", () => {
+  const changes = vi.fn();
+  const view = MetadataFields({ value: emptyMetadata, onChange: changes, places: [], disabled: true });
+  const children = view.props.children as ReactElement<{ onPick?: (lat: number, lng: number) => void }>[];
+  const map = children.find((child) => typeof child?.props?.onPick === "function")!;
+  map.props.onPick!(26.3, 127.7);
+  expect(changes).not.toHaveBeenCalled();
 });

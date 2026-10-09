@@ -1,5 +1,10 @@
 import type { AlbumPhoto, PhotoMetadata, UploadReservation } from "./model";
 export class AlbumClientError extends Error { constructor(message: string, public status: number) { super(message); } }
+export async function cancelReservation(reservation: UploadReservation): Promise<{ photo?: AlbumPhoto; cleanupPending?: boolean }> {
+  try { return await albumRequest<{ photo: AlbumPhoto }>(`/api/album/${reservation.id}`); }
+  catch (error) { if (!(error instanceof AlbumClientError) || error.status !== 404) throw error; }
+  return albumRequest<{ cleanupPending: boolean }>(`/api/album/${reservation.id}`, "DELETE", { revision: reservation.revision });
+}
 export async function albumRequest<T>(url: string, method = "GET", body?: unknown): Promise<T> {
   const response = await fetch(url, { method, cache: "no-store", signal: AbortSignal.timeout(65000), ...(body !== undefined ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}) });
   const result = await response.json().catch(() => ({}));

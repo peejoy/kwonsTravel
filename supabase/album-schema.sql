@@ -18,6 +18,7 @@ create table public.family_album (
   upload_expires_at timestamptz not null,
   lease_id uuid,
   lease_expires_at timestamptz,
+  temporary_cleanup_pending boolean not null default false,
   check ((lat is null) = (lng is null)),
   check ((lat is null) = (location_source = 'none')),
   check ((lease_id is null) = (lease_expires_at is null)),

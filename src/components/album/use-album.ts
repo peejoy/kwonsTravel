@@ -48,9 +48,9 @@ export function useAlbum(onAuthRequired: () => void) {
     catch (err) { fail(err); throw err; }
   }
   async function cleanup() {
-    try { const result = await albumRequest<{ pending: number }>("/api/album/cleanup", "POST", {}); setCleanupPending(result.pending > 0); }
+    try { const result = await albumRequest<{ pending: number; hasMore: boolean }>("/api/album/cleanup", "POST", {}); setCleanupPending(result.pending > 0 || result.hasMore); }
     catch (err) { fail(err); }
   }
   return { photos, loading, error, setup, cleanupPending, loadMore: () => load(cursor), hasMore: !!cursor, refresh: () => load(), refreshPhoto, edit, remove, cleanup,
-    add: (photo: AlbumPhoto) => setPhotos((old) => [photo, ...old.filter((p) => p.id !== photo.id)]), fail };
+    add: (photo: AlbumPhoto) => setPhotos((old) => [photo, ...old.filter((p) => p.id !== photo.id)]), markCleanupPending: () => setCleanupPending(true), fail };
 }
