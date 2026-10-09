@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CalendarDays, Camera, Check, CheckCircle2, Download, Heart, ListChecks, LoaderCircle, LogOut, MapPin, Plane, Plus, Settings, Share2, Users, Utensils, X, LockKeyhole } from "lucide-react";
-import { mergeEditedRecord, parseTripState, removePlace, tripDates, type PackingItem, type Place, type ScheduleItem, type Trip, type TripState } from "@/lib/model";
+import { mergeEditedRecord, parseTripState, removePlace, tripDates, type Category, type PackingItem, type Place, type ScheduleItem, type Trip, type TripState } from "@/lib/model";
 import { DeleteConfirm, ImportConfirm, PackingEditor, PlaceDetail, PlaceEditor, ScheduleEditor, TripEditor } from "./editors";
 import { IconButton, Modal } from "./ui";
 import { ItineraryView, PlacesView, PackingView, SettingsView } from "./views";
 
 export type View = "itinerary" | "places" | "food" | "photo" | "packing" | "settings";
-type Editor = { kind: "place"; value?: Place } | { kind: "schedule"; value?: ScheduleItem; placeId?: string } | { kind: "packing"; value?: PackingItem } | { kind: "trip" } | { kind: "import"; value: TripState; filename: string } | null;
+type Editor = { kind: "place"; value?: Place; category?: Category } | { kind: "schedule"; value?: ScheduleItem; placeId?: string } | { kind: "packing"; value?: PackingItem } | { kind: "trip" } | { kind: "import"; value: TripState; filename: string } | null;
 type Deletion = { kind: "place" | "schedule" | "packing"; id: string; title: string } | null;
 type Session = { authenticated: boolean; mode: "local" | "shared" };
 const nav = [
@@ -190,7 +190,7 @@ export default function Planner() {
   const favorites = state.places.filter((p) => p.favorite).length;
   const currentView = view === "settings" ? { label: "여행 설정" } : nav.find((n) => n.id === view)!;
   const closeEditor = () => { if (!busy) setEditor(null); };
-  const addPlace = () => setEditor({ kind: "place" });
+  const addPlace = () => setEditor({ kind: "place", category: view === "food" || view === "photo" ? view : "sight" });
   return <div className="app-shell">
     <aside className="sidebar"><a className="brand" href="/" aria-label="오키나와 여행 홈"><span className="brand-icon"><Plane size={24} strokeWidth={1.7} /></span><span>Okinawa<span className="brand-subtitle">우리 가족 여행</span></span></a>
       <div className="sidebar-divider" /><div className="nav-heading">여행 노트</div><nav className="side-nav" aria-label="주 메뉴">{nav.map(({ id, label, icon: Icon }) => <button key={id} aria-label={label} className={view === id ? "active" : ""} onClick={() => setView(id)}><Icon size={19} strokeWidth={1.8} /><span>{label}</span>{id === "packing" && <span className="nav-count">{done}/{state.packing.length}</span>}{id === "places" && <span className="nav-count">{state.places.length}</span>}</button>)}</nav>
@@ -207,7 +207,7 @@ export default function Planner() {
     </main>
     <nav className="mobile-nav" aria-label="모바일 메뉴">{nav.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)} aria-label={label}><Icon size={19} /><span>{id === "itinerary" ? "일정" : id === "places" ? "장소" : label}</span></button>)}</nav>
     {notice && <div role={notice.error ? "alert" : "status"} className={`toast${notice.error ? " error" : ""}`}><span>{notice.error ? <X size={17} /> : <Check size={17} />}{notice.text}</span><IconButton label="알림 닫기" onClick={() => setNotice(null)}><X size={16} /></IconButton></div>}
-    {editor?.kind === "place" && <PlaceEditor value={editor.value} onSave={savePlace} onClose={closeEditor} busy={busy} onAuthRequired={() => setSession((current) => current && { ...current, authenticated: false })} />}
+    {editor?.kind === "place" && <PlaceEditor value={editor.value} defaultCategory={editor.category} onSave={savePlace} onClose={closeEditor} busy={busy} onAuthRequired={() => setSession((current) => current && { ...current, authenticated: false })} />}
     {editor?.kind === "schedule" && <ScheduleEditor value={editor.value} placeId={editor.placeId} state={state} day={day} onSave={saveSchedule} onClose={closeEditor} busy={busy} />}
     {editor?.kind === "packing" && <PackingEditor value={editor.value} onSave={savePacking} onClose={closeEditor} busy={busy} />}
     {editor?.kind === "trip" && <TripEditor value={state.trip} onSave={saveTrip} onClose={closeEditor} busy={busy} />}

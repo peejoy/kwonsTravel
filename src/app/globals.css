@@ -246,6 +246,10 @@ progress::-moz-progress-bar { background: var(--green); }
 .maps-link-row > input { min-width: 0; flex: 1; }
 .maps-link-row > .button { min-width: 104px; flex-shrink: 0; }
 .maps-link-import .form-error { margin-top: 8px; }
+.maps-place-preview { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.maps-place-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.maps-place-preview-heading h3 { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.maps-place-preview-heading .button { flex-shrink: 0; }
 .form-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 7px; padding-top: 19px; border-top: 1px solid var(--line); }
 .form-error { color: #b65346; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .confirm-copy { font-size: 13px; color: #7c8f81; }

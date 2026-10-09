@@ -85,10 +85,13 @@ try {
 
   await page.getByRole("button", { name: "저장한 장소", exact: true }).first().click();
   await page.getByRole("button", { name: "장소 추가", exact: true }).click();
-  await page.getByLabel("장소 이름", { exact: true }).fill("QA 가족 사진 장소");
+  assert.equal(await page.getByRole("button", { name: "장소 등록", exact: true }).isEnabled(), false);
+  assert.equal(await page.getByLabel("장소 이름", { exact: true }).count(), 0);
+  await page.getByLabel("Google 지도 링크", { exact: true }).fill("https://www.google.com/maps/place/QA+가족+사진+장소/data=!3d26.214!4d127.6812");
+  await page.getByRole("button", { name: "불러오기", exact: true }).click();
+  await page.getByRole("heading", { name: "QA 가족 사진 장소", exact: true }).waitFor();
   await page.getByLabel("분류", { exact: true }).selectOption("photo");
-  await page.getByLabel("지역", { exact: true }).fill("나하");
-  await page.getByRole("button", { name: "저장", exact: true }).click();
+  await page.getByRole("button", { name: "장소 등록", exact: true }).click();
   await saved(page);
   const created = (await bodyState(page)).places.find((place) => place.name === "QA 가족 사진 장소");
   assert(created);

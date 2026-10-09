@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ExternalLink, MapPin, Plus, Trash2, Link2, LoaderCircle } from "lucide-react";
-import { categoryLabels, packingCategories, mapsUrl, type Category, type PackingItem, type Place, type ScheduleItem, type Trip, type TripState } from "@/lib/model";
+import { categoryLabels, packingCategories, mapsUrl, placeSchema, type Category, type PackingItem, type Place, type ScheduleItem, type Trip, type TripState } from "@/lib/model";
 import { googleMapsLinkUrl, type GoogleMapsPlaceDraft } from "@/lib/maps-link";
 import TripMap from "./trip-map";
 import { CategoryBadge, Modal, NavigationControls, PlaceImage, SubmitButton } from "./ui";
@@ -17,8 +17,59 @@ function useSave<T>(save: (value: T) => Promise<void>) {
   return { error, submit: async (value: T) => { setError(""); try { await save(value); } catch (err) { setError(err instanceof Error ? err.message : "저장하지 못했습니다. 다시 시도해주세요."); } } };
 }
 
-export function PlaceEditor({ value, onSave, onClose, busy, onAuthRequired }: Common & { value?: Place; onSave: (value: Place, original?: Place) => Promise<void>; onAuthRequired: () => void }) {
-  const [draft, setDraft] = useState<Place>(value || { id: crypto.randomUUID(), name: "", category: "sight", area: "", description: "", lat: 26.214, lng: 127.6812, image: "", link: "", favorite: false, notes: "" });
+type PlaceEditorProps = Common & { value?: Place; defaultCategory?: Category; onSave: (value: Place, original?: Place) => Promise<void>; onAuthRequired: () => void };
+export function PlaceEditor({ value, ...props }: PlaceEditorProps) {
+  return value ? <ExistingPlaceEditor value={value} {...props} /> : <GooglePlaceAdd {...props} />;
+}
+
+function GooglePlaceAdd({ defaultCategory = "sight", onSave, onClose, busy, onAuthRequired }: Omit<PlaceEditorProps, "value">) {
+  const linkInput = useRef<HTMLInputElement>(null);
+  useEffect(() => { linkInput.current?.focus(); }, []);
+  const [id] = useState(() => crypto.randomUUID());
+  const [mapLink, setMapLink] = useState("");
+  const [category, setCategory] = useState<Category>(defaultCategory);
+  const [favorite, setFavorite] = useState(false);
+  const [imported, setImported] = useState<Place | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [linkError, setLinkError] = useState("");
+  const { error, submit } = useSave<Place>((place) => onSave(place));
+  const locked = busy || importing;
+  const ready = imported !== null && mapLink.trim() === imported.googleMapsUrl;
+
+  async function importLink() {
+    if (locked || !mapLink.trim()) return;
+    setImporting(true); setImported(null); setLinkError("");
+    try {
+      const source = googleMapsLinkUrl(mapLink).href;
+      const response = await fetch("/api/places/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: source }) });
+      const data = await response.json();
+      if (response.status === 401) onAuthRequired();
+      if (!response.ok) throw new Error(data.error || "장소를 불러오지 못했습니다.");
+      const place: GoogleMapsPlaceDraft | undefined = data.place;
+      const parsed = placeSchema.safeParse({
+        id, name: place?.name, lat: place?.lat, lng: place?.lng, googleMapsUrl: place?.googleMapsUrl,
+        category, favorite, area: "", description: "", image: "", link: "", notes: "",
+      });
+      if (!parsed.success || !place?.googleMapsUrl) throw new Error("장소 이름과 정확한 위치를 확인할 수 없습니다. Google 지도에서 해당 장소의 공유 링크를 다시 복사해주세요.");
+      setImported(parsed.data); setMapLink(place.googleMapsUrl);
+    } catch (err) {
+      setLinkError(err instanceof Error && !(err instanceof TypeError) ? err.message : "링크를 불러오지 못했습니다. 연결을 확인하고 다시 시도해주세요.");
+    } finally { setImporting(false); }
+  }
+
+  return <Modal title="Google 지도로 장소 추가" onClose={onClose} busy={locked}>
+    <EditorForm busy={locked} onSubmit={(e) => { e.preventDefault(); if (!locked && ready && imported) void submit({ ...imported, category, favorite }); }}>
+      <div className="maps-link-import"><label>Google 지도 링크<div className="maps-link-row"><input ref={linkInput} type="url" required aria-label="Google 지도 링크" maxLength={2048} value={mapLink} onChange={(e) => { setMapLink(e.target.value); setImported(null); setLinkError(""); }} placeholder="https://maps.app.goo.gl/…" autoFocus onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void importLink(); } }} /><button type="button" className="button secondary" disabled={locked || !mapLink.trim()} onClick={() => void importLink()}>{importing ? <LoaderCircle size={16} className="spin" /> : <Link2 size={16} />}{importing ? "불러오는 중" : "불러오기"}</button></div></label><ErrorMessage error={linkError} /></div>
+      {ready && imported && <section className="maps-place-preview" aria-label="불러온 장소"><div className="maps-place-preview-heading"><h3>{imported.name}</h3><a className="button secondary" href={imported.googleMapsUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} />Google 지도</a></div><TripMap compact points={[{ place: imported, key: imported.id, order: 1 }]} selected={imported.id} onSelect={() => {}} /></section>}
+      <label>분류<select aria-label="분류" value={category} onChange={(e) => setCategory(e.target.value as Category)}>{Object.entries(categoryLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+      <label className="checkbox-label"><input type="checkbox" checked={favorite} onChange={(e) => setFavorite(e.target.checked)} />즐겨찾기에 저장</label>
+      <ErrorMessage error={error} /><div className="form-actions"><button className="button secondary" type="button" onClick={onClose} disabled={locked}>취소</button><SubmitButton busy={busy} disabled={!ready || importing}>장소 등록</SubmitButton></div>
+    </EditorForm>
+  </Modal>;
+}
+
+function ExistingPlaceEditor({ value, onSave, onClose, busy, onAuthRequired }: PlaceEditorProps & { value: Place }) {
+  const [draft, setDraft] = useState<Place>(value);
   const [mapLink, setMapLink] = useState(value?.googleMapsUrl || "");
   const [importing, setImporting] = useState(false);
   const [linkError, setLinkError] = useState("");
