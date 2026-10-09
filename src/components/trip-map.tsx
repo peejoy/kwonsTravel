@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { APIProvider, Map as GoogleMap, AdvancedMarker, useMap, useMapsLibrary } from "@vis.gl/react-google-maps";
-import { Expand, Layers, MapPin, LoaderCircle } from "lucide-react";
+import { Camera, Expand, Layers, MapPin, LoaderCircle } from "lucide-react";
 import type { Place } from "@/lib/model";
 import { IconButton } from "./ui";
 
@@ -13,10 +13,12 @@ type Props = {
   onSelect: (key: string) => void;
   onPick?: (lat: number, lng: number) => void;
   compact?: boolean;
+  connectPoints?: boolean;
+  markerKind?: "place" | "photo";
 };
 const center = { lat: 26.36, lng: 127.8 };
 
-function GoogleControls({ points, selected, reset }: { points: MapPoint[]; selected: string | null; reset: number }) {
+function GoogleControls({ points, selected, reset, connectPoints = true }: { points: MapPoint[]; selected: string | null; reset: number; connectPoints?: boolean }) {
   const map = useMap();
   const core = useMapsLibrary("core");
   const maps = useMapsLibrary("maps");
@@ -36,14 +38,14 @@ function GoogleControls({ points, selected, reset }: { points: MapPoint[]; selec
     if (point) map.panTo({ lat: point.place.lat, lng: point.place.lng });
   }, [map, selected, positionsKey]);
   useEffect(() => {
-    if (!map || !maps) return;
+    if (!map || !maps || !connectPoints) return;
     const line = new maps.Polyline({ map, path: points.map(({ place }) => ({ lat: place.lat, lng: place.lng })), strokeColor: "#19806b", strokeOpacity: 0.65, strokeWeight: 3, geodesic: false });
     return () => line.setMap(null);
-  }, [map, maps, positionsKey]);
+  }, [map, maps, positionsKey, connectPoints]);
   return null;
 }
 
-function BaseMap({ points, selected, onSelect, onPick, reset, onReady }: Props & { reset: number; onReady: () => void }) {
+function BaseMap({ points, selected, onSelect, onPick, reset, onReady, connectPoints = true, markerKind = "place" }: Props & { reset: number; onReady: () => void }) {
   const container = useRef<HTMLDivElement>(null);
   const instance = useRef<import("leaflet").Map | null>(null);
   const layer = useRef<import("leaflet").LayerGroup | null>(null);
@@ -78,10 +80,10 @@ function BaseMap({ points, selected, onSelect, onPick, reset, onReady }: Props &
       if (!group || !map) return;
       group.clearLayers();
       const coords = points.map(({ place }) => L.latLng(place.lat, place.lng));
-      if (coords.length > 1) L.polyline(coords, { color: "#19806b", weight: 3, opacity: 0.65 }).addTo(group);
+      if (connectPoints && coords.length > 1) L.polyline(coords, { color: "#19806b", weight: 3, opacity: 0.65 }).addTo(group);
       points.forEach((point) => {
         const element = document.createElement("button");
-        element.className = `map-pin${selected === point.key ? " selected" : ""}`;
+        element.className = `map-pin${markerKind === "photo" ? " photo-map-pin" : ""}${selected === point.key ? " selected" : ""}`;
         element.textContent = String(point.order);
         element.type = "button";
         element.setAttribute("aria-label", point.place.name);
@@ -89,7 +91,7 @@ function BaseMap({ points, selected, onSelect, onPick, reset, onReady }: Props &
         L.marker([point.place.lat, point.place.lng], { icon, title: point.place.name }).on("click", () => callbacks.current.onSelect(point.key)).addTo(group);
       });
     });
-  }, [ready, positionsKey, selected]);
+  }, [ready, positionsKey, selected, connectPoints, markerKind]);
   useEffect(() => {
     if (!ready || !instance.current || !points.length) return;
     const map = instance.current;
@@ -119,13 +121,13 @@ export default function TripMap(props: Props) {
   return <div className={`trip-map${props.compact ? " compact" : ""}`} data-ready={ready}>
     {provider === "google" ? <APIProvider apiKey={apiKey} language="ko" region="JP" onError={() => { setAuthError(true); setProvider("base"); }}>
       <GoogleMap defaultCenter={center} defaultZoom={10} mapId={process.env.NEXT_PUBLIC_GOOGLE_MAP_ID || "DEMO_MAP_ID"} disableDefaultUI zoomControl gestureHandling="greedy" clickableIcons={false} onTilesLoaded={() => setReady(true)} onClick={(event) => { const p = event.detail.latLng; if (p) props.onPick?.(p.lat, p.lng); }}>
-        {props.points.map((point) => <AdvancedMarker key={point.key} position={{ lat: point.place.lat, lng: point.place.lng }} title={point.place.name} onClick={() => props.onSelect(point.key)} zIndex={props.selected === point.key ? 10 : 1}><button type="button" tabIndex={-1} className={`map-pin${props.selected === point.key ? " selected" : ""}`} aria-label={point.place.name}>{point.order}</button></AdvancedMarker>)}
-        <GoogleControls points={props.points} selected={props.selected} reset={reset} />
+        {props.points.map((point) => <AdvancedMarker key={point.key} position={{ lat: point.place.lat, lng: point.place.lng }} title={point.place.name} onClick={() => props.onSelect(point.key)} zIndex={props.selected === point.key ? 10 : 1}><button type="button" tabIndex={-1} className={`map-pin${props.markerKind === "photo" ? " photo-map-pin" : ""}${props.selected === point.key ? " selected" : ""}`} aria-label={point.place.name}>{props.markerKind === "photo" ? <Camera size={15} /> : point.order}</button></AdvancedMarker>)}
+        <GoogleControls points={props.points} selected={props.selected} reset={reset} connectPoints={props.connectPoints} />
       </GoogleMap>
     </APIProvider> : <BaseMap {...props} reset={reset} onReady={() => setReady(true)} />}
     {!ready && <div className="map-loading" role="status"><LoaderCircle size={21} className="spin" /><span>지도를 불러오는 중</span></div>}
-    <div className="map-topbar"><span className="map-caption"><MapPin size={14} />{props.points.length}개 장소</span><div className="map-tools"><button className="map-provider" type="button" onClick={() => setProvider(provider === "google" ? "base" : apiKey ? "google" : "base")} title="지도 전환"><Layers size={15} />{provider === "google" ? "Google 지도" : "기본 지도"}</button><IconButton label="전체 장소 보기" onClick={() => setReset((n) => n + 1)}><Expand size={17} /></IconButton></div></div>
+    <div className="map-topbar"><span className="map-caption"><MapPin size={14} />{props.points.length}{props.markerKind === "photo" ? "개 촬영 위치" : "개 장소"}</span><div className="map-tools"><button className="map-provider" type="button" onClick={() => setProvider(provider === "google" ? "base" : apiKey ? "google" : "base")} title="지도 전환"><Layers size={15} />{provider === "google" ? "Google 지도" : "기본 지도"}</button><IconButton label="전체 장소 보기" onClick={() => setReset((n) => n + 1)}><Expand size={17} /></IconButton></div></div>
     {authError && provider === "base" && <div className="map-message">구글 지도 연결을 확인해주세요. 기본 지도를 표시합니다.</div>}
-    <div className="map-legend"><span className="legend-line" />방문 순서{props.onPick && <span className="map-pick-label">장소 위치 선택 중</span>}</div>
+    <div className="map-legend">{props.markerKind === "photo" ? <><Camera size={14} />촬영 위치</> : <><span className="legend-line" />방문 순서</>}{props.onPick && <span className="map-pick-label">장소 위치 선택 중</span>}</div>
   </div>;
 }

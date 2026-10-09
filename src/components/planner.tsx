@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CalendarDays, Camera, Check, CheckCircle2, Download, Heart, ListChecks, LoaderCircle, LogOut, MapPin, Plane, Plus, Settings, Share2, Users, Utensils, X, LockKeyhole } from "lucide-react";
+import { CalendarDays, Camera, Check, CheckCircle2, Download, Heart, Images, ListChecks, LoaderCircle, LogOut, MapPin, Plane, Plus, Settings, Share2, Users, Utensils, X, LockKeyhole } from "lucide-react";
 import { mergeEditedRecord, parseTripState, placeSchema, removePlace, tripDates, type Category, type PackingItem, type Place, type ScheduleItem, type Trip, type TripState } from "@/lib/model";
 import { DeleteConfirm, ImportConfirm, PackingEditor, PlaceDetail, PlaceEditor, ScheduleEditor, TripEditor } from "./editors";
 import { IconButton, Modal } from "./ui";
 import { ItineraryView, PlacesView, PackingView, SettingsView } from "./views";
+import AlbumView from "./album/album-view";
 
-export type View = "itinerary" | "places" | "food" | "photo" | "packing" | "settings";
+export type View = "itinerary" | "places" | "food" | "photo" | "packing" | "settings" | "album";
 type Editor = { kind: "place"; value?: Place; category?: Category } | { kind: "schedule"; value?: ScheduleItem; placeId?: string } | { kind: "packing"; value?: PackingItem } | { kind: "trip" } | { kind: "import"; value: TripState; filename: string } | null;
 type Deletion = { kind: "place" | "schedule" | "packing"; id: string; title: string } | null;
 type Session = { authenticated: boolean; mode: "local" | "shared" };
@@ -17,6 +18,7 @@ const nav = [
   { id: "food" as const, label: "맛집", icon: Utensils },
   { id: "photo" as const, label: "사진 명소", icon: Camera },
   { id: "packing" as const, label: "준비물", icon: ListChecks },
+  { id: "album" as const, label: "여행 앨범", icon: Images },
 ];
 function friendlyError(error: unknown, fallback: string): string {
   return error instanceof Error && /[가-힣]/.test(error.message) ? error.message : fallback;
@@ -245,7 +247,8 @@ export default function Planner() {
       <div className="sidebar-bottom"><button className={view === "settings" ? "sidebar-settings active" : "sidebar-settings"} onClick={() => setView("settings")}><Settings size={18} />여행 설정</button><span className="storage-status"><span className={`status-dot ${session.mode}`} />{session.mode === "shared" ? "가족과 공유 중" : "이 컴퓨터에 저장"}</span><a className="credits-link" href="/credits" target="_blank" rel="noopener noreferrer">사진 출처</a></div>
     </aside>
     <main className="main-content"><header className="main-header"><div><div className="trip-label"><span className="destination-dot" />Japan, Okinawa</div><h1>{state.trip.title}</h1><div className="trip-meta"><span><CalendarDays size={14} />{tripDates(state.trip)}</span><span><Users size={14} />{state.trip.travelers ? `${state.trip.travelers}명` : "가족 여행"}</span><IconButton label="여행 정보 수정" onClick={() => setEditor({ kind: "trip" })}><Settings size={14} /></IconButton></div></div><div className="header-actions"><span className="save-indicator">{busy ? <LoaderCircle size={14} className="spin" /> : <CheckCircle2 size={14} />}{busy ? "저장 중" : "저장됨"}</span><IconButton label="여행 파일 다운로드" onClick={exportTrip}><Download size={18} /></IconButton><button className="button secondary share-button" disabled={session.mode !== "shared"} title={session.mode === "local" ? "가족 공유 연결 후 사용" : "가족 공유 링크 복사"} onClick={() => void share()}><Share2 size={16} />가족 공유</button></div></header>
-      <div className="view-header"><div><h2>{currentView.label}</h2><span className="view-count">{view === "itinerary" ? `${state.trip.days}일 · ${state.schedule.length}개 일정` : view === "packing" ? `${done} / ${state.packing.length}개 준비 완료` : view === "settings" ? "우리 가족의 여행 정보" : view === "places" ? `${state.places.length}개 장소 · 즐겨찾기 ${favorites}개` : `${state.places.filter((p) => p.category === view).length}개 장소`}</span></div>{view !== "settings" && <button className="button primary" onClick={() => view === "itinerary" ? setEditor({ kind: "schedule" }) : view === "packing" ? setEditor({ kind: "packing" }) : addPlace()}><Plus size={16} />{view === "itinerary" ? "일정 추가" : view === "packing" ? "준비물 추가" : "장소 추가"}</button>}</div>
+      <div className="view-header"><div><h2>{currentView.label}</h2><span className="view-count">{view === "itinerary" ? `${state.trip.days}일 · ${state.schedule.length}개 일정` : view === "packing" ? `${done} / ${state.packing.length}개 준비 완료` : view === "settings" ? "우리 가족의 여행 정보" : view === "album" ? "가족의 여행사진" : view === "places" ? `${state.places.length}개 장소 · 즐겨찾기 ${favorites}개` : `${state.places.filter((p) => p.category === view).length}개 장소`}</span></div>{view !== "settings" && view !== "album" && <button className="button primary" onClick={() => view === "itinerary" ? setEditor({ kind: "schedule" }) : view === "packing" ? setEditor({ kind: "packing" }) : addPlace()}><Plus size={16} />{view === "itinerary" ? "일정 추가" : view === "packing" ? "준비물 추가" : "장소 추가"}</button>}</div>
+      {view === "album" && <AlbumView places={state.places} onAuthRequired={() => setSession((current) => current && { ...current, authenticated: false })} />}
       {view === "itinerary" && <ItineraryView state={state} day={day} setDay={(d) => { setDay(d); setSelected(null); }} selected={selected} setSelected={setSelected} busy={busy} onEdit={(value) => setEditor({ kind: "schedule", value })} onAdd={() => setEditor({ kind: "schedule" })} onToggle={(id) => quickChange((s) => ({ ...s, schedule: s.schedule.map((i) => i.id === id ? { ...i, completed: !i.completed } : i) }))} onMove={moveSchedule} onDetail={setDetail} onDelete={(entry, name) => setDeletion({ kind: "schedule", id: entry.id, title: name })} />}
       {(view === "places" || view === "food" || view === "photo") && <PlacesView key={view} state={state} view={view} onDetail={setDetail} onAdd={addPlace} busy={busy} onFavorite={(id) => quickChange((s) => ({ ...s, places: s.places.map((p) => p.id === id ? { ...p, favorite: !p.favorite } : p) }))} onSchedule={(placeId) => setEditor({ kind: "schedule", placeId })} onPhotos={session.mode === "local" ? (places) => void populatePhotos(places) : undefined} photoProgress={photoProgress} />}
       {view === "packing" && <PackingView state={state} busy={busy} onToggle={(id) => quickChange((s) => ({ ...s, packing: s.packing.map((i) => i.id === id ? { ...i, done: !i.done } : i) }))} onEdit={(value) => setEditor({ kind: "packing", value })} onAdd={() => setEditor({ kind: "packing" })} onDelete={(item) => setDeletion({ kind: "packing", id: item.id, title: item.label })} />}
