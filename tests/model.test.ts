@@ -46,6 +46,25 @@ describe("trip data integrity", () => {
     expect(url.searchParams.has("key")).toBe(false);
     expect(url.searchParams.get("destination")).toContain(",");
   });
+  it("starts navigation from device location without a Maps API key", () => {
+    const place = createSeed().places[0];
+    const url = new URL(mapsUrl(place, "navigate"));
+    expect(url.pathname).toBe("/maps/dir/");
+    expect(url.searchParams.get("destination")).toBe(`${place.lat},${place.lng}`);
+    expect(url.searchParams.get("dir_action")).toBe("navigate");
+    expect(url.searchParams.get("travelmode")).toBe("driving");
+    expect(url.searchParams.has("origin")).toBe(false);
+    expect(url.searchParams.has("key")).toBe(false);
+  });
+  it.each(["walking", "transit"] as const)("supports %s navigation", (mode) => {
+    expect(new URL(mapsUrl(createSeed().places[0], "navigate", mode)).searchParams.get("travelmode")).toBe(mode);
+  });
+  it("preserves an imported Google Maps source through backups", () => {
+    const state = createSeed();
+    const source = "https://www.google.com/maps?q=26.2,127.6";
+    const input = { ...state, places: [{ ...state.places[0], googleMapsUrl: source }, ...state.places.slice(1)] };
+    expect(parseTripState(input).places[0]).toMatchObject({ googleMapsUrl: source });
+  });
   it("keeps a family member's unrelated changes when retrying an edited record", () => {
     const original = createSeed().trip;
     const edited = { ...original, title: "가족이 입력한 여행 이름" };

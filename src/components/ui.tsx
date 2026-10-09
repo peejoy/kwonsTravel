@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, MapPin, Plane, Utensils, BedDouble, X, LoaderCircle } from "lucide-react";
-import { categoryLabels, type Category } from "@/lib/model";
+import { Camera, MapPin, Plane, Utensils, BedDouble, X, LoaderCircle, Navigation, Car, Footprints, TramFront } from "lucide-react";
+import { categoryLabels, mapsUrl, type Category, type Place, type TravelMode } from "@/lib/model";
 
 export const categoryIcons = { sight: MapPin, food: Utensils, photo: Camera, stay: BedDouble, transport: Plane };
 export function CategoryBadge({ category }: { category: Category }) {
@@ -24,8 +24,17 @@ export function Modal({ title, children, onClose, busy = false, dismissible = tr
     {children}
   </dialog>;
 }
-export function SubmitButton({ busy, children = "저장" }: { busy: boolean; children?: React.ReactNode }) {
-  return <button type="submit" className="button primary" disabled={busy}>{busy && <LoaderCircle size={16} className="spin" />}{busy ? "저장 중" : children}</button>;
+export function SubmitButton({ busy, disabled = false, children = "저장" }: { busy: boolean; disabled?: boolean; children?: React.ReactNode }) {
+  return <button type="submit" className="button primary" disabled={busy || disabled}>{busy && <LoaderCircle size={16} className="spin" />}{busy ? "저장 중" : children}</button>;
+}
+export function NavigationLink({ place, mode = "driving", compact = false, className = "button secondary" }: { place: Place; mode?: TravelMode; compact?: boolean; className?: string }) {
+  const label = `${place.name} 길안내`;
+  return <a href={mapsUrl(place, "navigate", mode)} target="_blank" rel="noopener noreferrer" title={label} aria-label={label} className={className}><Navigation size={compact ? 14 : 15} />{!compact && "길안내"}</a>;
+}
+export function NavigationControls({ place }: { place: Place }) {
+  const [mode, setMode] = useState<TravelMode>("driving");
+  const modes = [{ id: "driving", label: "자동차", icon: Car }, { id: "walking", label: "도보", icon: Footprints }, { id: "transit", label: "대중교통", icon: TramFront }] as const;
+  return <div className="navigation-controls"><div className="segmented travel-modes" role="group" aria-label="이동 수단">{modes.map(({ id, label, icon: Icon }) => <button type="button" key={id} className={mode === id ? "active" : ""} aria-pressed={mode === id} onClick={() => setMode(id)}><Icon size={15} />{label}</button>)}</div><NavigationLink place={place} mode={mode} className="button primary" /></div>;
 }
 export function PlaceImage({ src, alt, className = "" }: { src: string; alt: string; className?: string }) {
   const [failed, setFailed] = useState(false);

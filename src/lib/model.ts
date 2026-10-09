@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { googleMapsLinkUrl } from "./maps-link";
 
 export const categoryLabels = {
   sight: "관광", food: "맛집", photo: "사진 명소", stay: "숙소", transport: "이동",
@@ -27,6 +28,10 @@ export const placeSchema = z.object({
   area: z.string().max(100), description: text,
   lat: z.number().finite().min(-90).max(90), lng: z.number().finite().min(-180).max(180),
   image, link: httpsOrEmpty, favorite: z.boolean(), notes: text,
+  googleMapsUrl: z.string().max(2048).refine((value) => {
+    if (!value) return true;
+    try { googleMapsLinkUrl(value); return true; } catch { return false; }
+  }, "Google 지도 공유 링크를 확인해주세요.").optional(),
 });
 export const scheduleSchema = z.object({
   id, placeId: id, day: z.number().int().min(1).max(14),
@@ -78,13 +83,15 @@ export function mergeEditedRecord<T extends object>(current: T, original: T, edi
 export function removePlace(state: TripState, placeId: string): TripState {
   return { ...state, places: state.places.filter((p) => p.id !== placeId), schedule: state.schedule.filter((s) => s.placeId !== placeId) };
 }
-export function mapsUrl(place: Place, action: "search" | "directions" = "search"): string {
+export type TravelMode = "driving" | "walking" | "transit";
+export function mapsUrl(place: Place, action: "search" | "directions" | "navigate" = "search", mode: TravelMode = "driving"): string {
   const url = new URL(`https://www.google.com/maps/${action === "search" ? "search" : "dir"}/`);
   url.searchParams.set("api", "1");
-  if (action === "directions") {
+  if (action !== "search") {
     url.searchParams.set("destination", `${place.lat},${place.lng}`);
-    url.searchParams.set("travelmode", "driving");
-  } else url.searchParams.set("query", `${place.name} Okinawa`);
+    url.searchParams.set("travelmode", mode);
+    if (action === "navigate") url.searchParams.set("dir_action", "navigate");
+  } else url.searchParams.set("query", `${place.lat},${place.lng}`);
   return url.toString();
 }
 export function dayDate(start: string, day: number): string {

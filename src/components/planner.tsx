@@ -207,7 +207,7 @@ export default function Planner() {
     </main>
     <nav className="mobile-nav" aria-label="모바일 메뉴">{nav.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)} aria-label={label}><Icon size={19} /><span>{id === "itinerary" ? "일정" : id === "places" ? "장소" : label}</span></button>)}</nav>
     {notice && <div role={notice.error ? "alert" : "status"} className={`toast${notice.error ? " error" : ""}`}><span>{notice.error ? <X size={17} /> : <Check size={17} />}{notice.text}</span><IconButton label="알림 닫기" onClick={() => setNotice(null)}><X size={16} /></IconButton></div>}
-    {editor?.kind === "place" && <PlaceEditor value={editor.value} onSave={savePlace} onClose={closeEditor} busy={busy} />}
+    {editor?.kind === "place" && <PlaceEditor value={editor.value} onSave={savePlace} onClose={closeEditor} busy={busy} onAuthRequired={() => setSession((current) => current && { ...current, authenticated: false })} />}
     {editor?.kind === "schedule" && <ScheduleEditor value={editor.value} placeId={editor.placeId} state={state} day={day} onSave={saveSchedule} onClose={closeEditor} busy={busy} />}
     {editor?.kind === "packing" && <PackingEditor value={editor.value} onSave={savePacking} onClose={closeEditor} busy={busy} />}
     {editor?.kind === "trip" && <TripEditor value={state.trip} onSave={saveTrip} onClose={closeEditor} busy={busy} />}
