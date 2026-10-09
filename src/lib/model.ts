@@ -13,9 +13,13 @@ const httpsOrEmpty = z.string().max(2048).refine((value) => {
   try { return new URL(value).protocol === "https:"; } catch { return false; }
 }, "https:// 주소를 입력해주세요.");
 const image = z.string().max(2048).refine((value) =>
-  !value || /^\/photos\/[a-zA-Z0-9_.-]+$/.test(value) || httpsOrEmpty.safeParse(value).success,
+  !value || /^\/photos\/[a-zA-Z0-9_.-]+$/.test(value) || /^\/api\/place-photos\/[a-f0-9]{64}$/.test(value) || httpsOrEmpty.safeParse(value).success,
   "사진은 HTTPS 주소를 입력해주세요.",
 );
+export const photoCreditSchema = z.object({
+  sourceUrl: z.string().max(2048).refine((value) => { try { googleMapsLinkUrl(value); return true; } catch { return false; } }),
+  authors: z.array(z.object({ displayName: short, uri: httpsOrEmpty })).max(10),
+});
 export function validDate(value: string): boolean {
   if (!value) return true;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -28,6 +32,7 @@ export const placeSchema = z.object({
   area: z.string().max(100), description: text,
   lat: z.number().finite().min(-90).max(90), lng: z.number().finite().min(-180).max(180),
   image, link: httpsOrEmpty, favorite: z.boolean(), notes: text,
+  photoCredit: photoCreditSchema.optional(),
   googleMapsUrl: z.string().max(2048).refine((value) => {
     if (!value) return true;
     try { googleMapsLinkUrl(value); return true; } catch { return false; }

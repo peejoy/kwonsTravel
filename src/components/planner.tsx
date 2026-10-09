@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CalendarDays, Camera, Check, CheckCircle2, Download, Heart, ListChecks, LoaderCircle, LogOut, MapPin, Plane, Plus, Settings, Share2, Users, Utensils, X, LockKeyhole } from "lucide-react";
-import { mergeEditedRecord, parseTripState, removePlace, tripDates, type Category, type PackingItem, type Place, type ScheduleItem, type Trip, type TripState } from "@/lib/model";
+import { mergeEditedRecord, parseTripState, placeSchema, removePlace, tripDates, type Category, type PackingItem, type Place, type ScheduleItem, type Trip, type TripState } from "@/lib/model";
 import { DeleteConfirm, ImportConfirm, PackingEditor, PlaceDetail, PlaceEditor, ScheduleEditor, TripEditor } from "./editors";
 import { IconButton, Modal } from "./ui";
 import { ItineraryView, PlacesView, PackingView, SettingsView } from "./views";
@@ -33,12 +33,14 @@ export default function Planner() {
   const [detail, setDetail] = useState<Place | null>(null);
   const [deletion, setDeletion] = useState<Deletion>(null);
   const [busy, setBusy] = useState(false);
+  const [photoProgress, setPhotoProgress] = useState("");
+  const [photoDeletion, setPhotoDeletion] = useState(false);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const stateRef = useRef(state);
   const busyRef = useRef(false);
   const editingRef = useRef(false);
   stateRef.current = state;
-  editingRef.current = !!(editor || detail || deletion);
+  editingRef.current = !!(editor || detail || deletion || photoDeletion);
   const showNotice = useCallback((text: string, error = false) => setNotice({ text, error }), []);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(null), notice.error ? 8000 : 3500); return () => clearTimeout(timer); }, [notice]);
   useEffect(() => { if (state) setDay((current) => Math.min(current, state.trip.days)); }, [state?.trip.days]);
@@ -106,7 +108,7 @@ export default function Planner() {
       if (!response.ok) throw new Error(result.error || "저장하지 못했습니다. 연결을 확인하고 다시 시도해주세요.");
       const saved = parseTripState(result.state);
       stateRef.current = saved; setState(saved);
-      showNotice("저장했습니다.");
+      showNotice(result.warning || "저장했습니다.", !!result.warning);
     } catch (error) {
       const message = friendlyError(error, "저장하지 못했습니다. 연결을 확인하고 다시 시도해주세요.");
       showNotice(message, true);
@@ -114,6 +116,51 @@ export default function Planner() {
     } finally { busyRef.current = false; setBusy(false); }
   }
   function quickChange(transform: (current: TripState) => TripState) { void commit(transform).catch(() => {}); }
+  async function populatePhotos(candidates: Place[]) {
+    if (busyRef.current || !stateRef.current) return;
+    if (session?.mode !== "local") { showNotice("사진 저장은 현재 로컬에서만 지원합니다.", true); return; }
+    const missing = candidates.filter((place) => !place.image && place.googleMapsUrl);
+    if (!missing.length) return;
+    const patches: { original: Place; updated: Place }[] = [];
+    let warning = "";
+    busyRef.current = true; setBusy(true);
+    try {
+      for (const [index, place] of missing.entries()) {
+        setPhotoProgress(`${index + 1} / ${missing.length}`);
+        const response = await fetch("/api/place-photos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ place: { name: place.name, lat: place.lat, lng: place.lng, googleMapsUrl: place.googleMapsUrl } }) });
+        const result = await response.json();
+        if (response.status === 401) setSession((s) => s && { ...s, authenticated: false });
+        if (!response.ok) throw new Error(result.error || "사진을 가져오지 못했습니다.");
+        if (result.photo) patches.push({ original: place, updated: placeSchema.parse({ ...place, ...result.photo }) });
+        else if (result.reason !== "missing") { warning = result.warning || "사진을 가져오지 못했습니다."; break; }
+      }
+    } catch (error) { warning = friendlyError(error, "사진을 가져오지 못했습니다. 연결을 확인해주세요."); }
+    finally { busyRef.current = false; setBusy(false); setPhotoProgress(""); }
+    if (patches.length) {
+      try {
+        await commit((current) => ({ ...current, places: current.places.map((place) => {
+          const patch = patches.find(({ original }) => original.id === place.id);
+          if (!patch || place.image || place.name !== patch.original.name || place.lat !== patch.original.lat || place.lng !== patch.original.lng || place.googleMapsUrl !== patch.original.googleMapsUrl) return place;
+          return { ...place, image: patch.updated.image, photoCredit: patch.updated.photoCredit };
+        }) }));
+      } catch { return; }
+    }
+    showNotice(warning ? `${patches.length ? `${patches.length}장 저장. ` : ""}${warning}` : patches.length ? `${patches.length}장의 사진을 저장했습니다.` : "등록된 위치와 일치하는 사진을 찾지 못했습니다.", !!warning);
+  }
+  async function deletePhotos() {
+    if (busyRef.current || !stateRef.current) return;
+    busyRef.current = true; setBusy(true);
+    try {
+      const response = await fetch("/api/place-photos", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedVersion: stateRef.current.version }) });
+      const result = await response.json();
+      if (response.status === 409 && result.state) { const latest = parseTripState(result.state); stateRef.current = latest; setState(latest); }
+      if (response.status === 401) setSession((s) => s && { ...s, authenticated: false });
+      if (!response.ok) throw new Error(result.error || "저장 사진을 삭제하지 못했습니다.");
+      const saved = parseTripState(result.state); stateRef.current = saved; setState(saved);
+      setPhotoDeletion(false); showNotice(result.warning || "저장 사진을 삭제했습니다. 여행 기록은 유지됩니다.", !!result.warning);
+    } catch (error) { showNotice(friendlyError(error, "저장 사진을 삭제하지 못했습니다."), true); }
+    finally { busyRef.current = false; setBusy(false); }
+  }
   async function savePlace(value: Place, original?: Place) {
     await commit((s) => {
       if (original && !s.places.some((p) => p.id === value.id)) throw new Error("다른 가족이 이 장소를 삭제했습니다.");
@@ -200,9 +247,9 @@ export default function Planner() {
     <main className="main-content"><header className="main-header"><div><div className="trip-label"><span className="destination-dot" />Japan, Okinawa</div><h1>{state.trip.title}</h1><div className="trip-meta"><span><CalendarDays size={14} />{tripDates(state.trip)}</span><span><Users size={14} />{state.trip.travelers ? `${state.trip.travelers}명` : "가족 여행"}</span><IconButton label="여행 정보 수정" onClick={() => setEditor({ kind: "trip" })}><Settings size={14} /></IconButton></div></div><div className="header-actions"><span className="save-indicator">{busy ? <LoaderCircle size={14} className="spin" /> : <CheckCircle2 size={14} />}{busy ? "저장 중" : "저장됨"}</span><IconButton label="여행 파일 다운로드" onClick={exportTrip}><Download size={18} /></IconButton><button className="button secondary share-button" disabled={session.mode !== "shared"} title={session.mode === "local" ? "가족 공유 연결 후 사용" : "가족 공유 링크 복사"} onClick={() => void share()}><Share2 size={16} />가족 공유</button></div></header>
       <div className="view-header"><div><h2>{currentView.label}</h2><span className="view-count">{view === "itinerary" ? `${state.trip.days}일 · ${state.schedule.length}개 일정` : view === "packing" ? `${done} / ${state.packing.length}개 준비 완료` : view === "settings" ? "우리 가족의 여행 정보" : view === "places" ? `${state.places.length}개 장소 · 즐겨찾기 ${favorites}개` : `${state.places.filter((p) => p.category === view).length}개 장소`}</span></div>{view !== "settings" && <button className="button primary" onClick={() => view === "itinerary" ? setEditor({ kind: "schedule" }) : view === "packing" ? setEditor({ kind: "packing" }) : addPlace()}><Plus size={16} />{view === "itinerary" ? "일정 추가" : view === "packing" ? "준비물 추가" : "장소 추가"}</button>}</div>
       {view === "itinerary" && <ItineraryView state={state} day={day} setDay={(d) => { setDay(d); setSelected(null); }} selected={selected} setSelected={setSelected} busy={busy} onEdit={(value) => setEditor({ kind: "schedule", value })} onAdd={() => setEditor({ kind: "schedule" })} onToggle={(id) => quickChange((s) => ({ ...s, schedule: s.schedule.map((i) => i.id === id ? { ...i, completed: !i.completed } : i) }))} onMove={moveSchedule} onDetail={setDetail} onDelete={(entry, name) => setDeletion({ kind: "schedule", id: entry.id, title: name })} />}
-      {(view === "places" || view === "food" || view === "photo") && <PlacesView key={view} state={state} view={view} onDetail={setDetail} onAdd={addPlace} busy={busy} onFavorite={(id) => quickChange((s) => ({ ...s, places: s.places.map((p) => p.id === id ? { ...p, favorite: !p.favorite } : p) }))} onSchedule={(placeId) => setEditor({ kind: "schedule", placeId })} />}
+      {(view === "places" || view === "food" || view === "photo") && <PlacesView key={view} state={state} view={view} onDetail={setDetail} onAdd={addPlace} busy={busy} onFavorite={(id) => quickChange((s) => ({ ...s, places: s.places.map((p) => p.id === id ? { ...p, favorite: !p.favorite } : p) }))} onSchedule={(placeId) => setEditor({ kind: "schedule", placeId })} onPhotos={session.mode === "local" ? (places) => void populatePhotos(places) : undefined} photoProgress={photoProgress} />}
       {view === "packing" && <PackingView state={state} busy={busy} onToggle={(id) => quickChange((s) => ({ ...s, packing: s.packing.map((i) => i.id === id ? { ...i, done: !i.done } : i) }))} onEdit={(value) => setEditor({ kind: "packing", value })} onAdd={() => setEditor({ kind: "packing" })} onDelete={(item) => setDeletion({ kind: "packing", id: item.id, title: item.label })} />}
-      {view === "settings" && <SettingsView state={state} mode={session.mode} onEdit={() => setEditor({ kind: "trip" })} onExport={exportTrip} onImport={(file) => void openImport(file)} onLogout={() => void logout()} />}
+      {view === "settings" && <SettingsView state={state} mode={session.mode} onEdit={() => setEditor({ kind: "trip" })} onExport={exportTrip} onImport={(file) => void openImport(file)} onLogout={() => void logout()} onDeletePhotos={() => setPhotoDeletion(true)} busy={busy} />}
       <footer className="main-footer"><span>우리 가족만의 여행 기록</span><span>Okinawa, Japan</span></footer>
     </main>
     <nav className="mobile-nav" aria-label="모바일 메뉴">{nav.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)} aria-label={label}><Icon size={19} /><span>{id === "itinerary" ? "일정" : id === "places" ? "장소" : label}</span></button>)}</nav>
@@ -214,6 +261,7 @@ export default function Planner() {
     {editor?.kind === "import" && <ImportConfirm value={editor.value} filename={editor.filename} onSave={importTrip} onClose={closeEditor} busy={busy} />}
     {detail && !deletion && <PlaceDetail place={detail} onClose={() => setDetail(null)} onEdit={() => { setEditor({ kind: "place", value: detail }); setDetail(null); }} onSchedule={() => { setEditor({ kind: "schedule", placeId: detail.id }); setDetail(null); }} onDelete={() => setDeletion({ kind: "place", id: detail.id, title: detail.name })} />}
     {deletion && <DeleteConfirm title={`${deletion.title} 삭제`} description={deletion.kind === "place" ? "이 장소와 연결된 일정도 함께 삭제됩니다." : "이 항목을 여행 기록에서 삭제할까요?"} onClose={() => { if (!busy) setDeletion(null); }} onDelete={deleteItem} busy={busy} />}
+    {photoDeletion && <DeleteConfirm title="저장 사진 전체 삭제" description="가져온 사진 파일과 사진 캐시를 모두 삭제합니다. 장소·일정·준비물과 기본 사진은 유지됩니다. 사진 삭제는 되돌릴 수 없습니다." onClose={() => { if (!busy) setPhotoDeletion(false); }} onDelete={deletePhotos} busy={busy} />}
     {!session.authenticated && <Login onSuccess={load} overlay />}
   </div>;
 }

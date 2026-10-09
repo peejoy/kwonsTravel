@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AuthConfigurationError, checkOrigin, isAuthenticated, jsonResponse } from "@/lib/auth";
 import { tripStateSchema } from "@/lib/model";
 import { getStorageMode, readTrip, StorageUnavailableError, TripConflictError, TripValidationError, writeTrip } from "@/lib/storage";
+import { withValidStoredPhotos } from "@/lib/place-photos";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,7 +43,8 @@ export async function PUT(request: NextRequest) {
     if (!authenticated) return jsonResponse({ error: "가족 비밀번호로 로그인해주세요." }, 401);
     const parsed = saveSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonResponse({ error: "여행 내용과 저장 버전을 확인해주세요." }, 400);
-    return jsonResponse({ state: await writeTrip(parsed.data.state, parsed.data.expectedVersion), mode });
+    const saved = await withValidStoredPhotos(parsed.data.state, (state) => writeTrip(state, parsed.data.expectedVersion));
+    return jsonResponse({ state: saved.state, mode, ...(saved.removedPhotos ? { warning: "삭제되거나 누락된 저장 사진은 제외하고 여행 내용을 저장했습니다." } : {}) });
   } catch (error) {
     return failure(error);
   }

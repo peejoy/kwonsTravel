@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { POST } from "@/app/api/places/import/route";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 const origin = "https://family.example";
 const link = "https://www.google.com/maps/place/Churaumi/data=!8m2!3d26.694292!4d127.877934";
@@ -9,12 +12,16 @@ function request(body: unknown, requestOrigin = origin) {
     method: "POST", headers: { Origin: requestOrigin, "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
 }
-beforeEach(() => {
+let directory: string;
+beforeEach(async () => {
+  directory = await mkdtemp(path.join(os.tmpdir(), "okinawa-import-test-"));
+  vi.stubEnv("TRIP_DATA_DIR", directory);
+  vi.stubEnv("GOOGLE_PLACES_API_KEY", "");
   vi.stubEnv("NODE_ENV", "test");
   vi.stubEnv("FAMILY_PASSWORD", "");
   vi.stubEnv("SESSION_SECRET", "");
 });
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+afterEach(async () => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); await rm(directory, { recursive: true, force: true }); });
 
 describe("place import API", () => {
   it("returns a place draft without changing the saved trip", async () => {

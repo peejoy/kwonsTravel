@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, MapPin, Plus, Trash2, Link2, LoaderCircle } from "lucide-react";
+import { ExternalLink, MapPin, Plus, Trash2, Link2, LoaderCircle, ImageDown } from "lucide-react";
 import { categoryLabels, packingCategories, mapsUrl, placeSchema, type Category, type PackingItem, type Place, type ScheduleItem, type Trip, type TripState } from "@/lib/model";
 import { googleMapsLinkUrl, type GoogleMapsPlaceDraft } from "@/lib/maps-link";
 import TripMap from "./trip-map";
-import { CategoryBadge, Modal, NavigationControls, PlaceImage, SubmitButton } from "./ui";
+import { CategoryBadge, Modal, NavigationControls, PhotoCredit, PlaceImage, SubmitButton } from "./ui";
 
 type Common = { onClose: () => void; busy: boolean };
+type ImportedPlace = GoogleMapsPlaceDraft & Partial<Pick<Place, "image" | "photoCredit">>;
 function EditorForm({ busy, children, onSubmit }: { busy: boolean; children: React.ReactNode; onSubmit: React.FormEventHandler<HTMLFormElement> }) {
   return <form onSubmit={onSubmit}><fieldset className="editor-form" disabled={busy}>{children}</fieldset></form>;
 }
@@ -32,26 +33,28 @@ function GooglePlaceAdd({ defaultCategory = "sight", onSave, onClose, busy, onAu
   const [imported, setImported] = useState<Place | null>(null);
   const [importing, setImporting] = useState(false);
   const [linkError, setLinkError] = useState("");
+  const [photoWarning, setPhotoWarning] = useState("");
   const { error, submit } = useSave<Place>((place) => onSave(place));
   const locked = busy || importing;
   const ready = imported !== null && mapLink.trim() === imported.googleMapsUrl;
 
   async function importLink() {
     if (locked || !mapLink.trim()) return;
-    setImporting(true); setImported(null); setLinkError("");
+    setImporting(true); setImported(null); setLinkError(""); setPhotoWarning("");
     try {
       const source = googleMapsLinkUrl(mapLink).href;
       const response = await fetch("/api/places/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: source }) });
       const data = await response.json();
       if (response.status === 401) onAuthRequired();
       if (!response.ok) throw new Error(data.error || "장소를 불러오지 못했습니다.");
-      const place: GoogleMapsPlaceDraft | undefined = data.place;
+      const place: ImportedPlace | undefined = data.place;
       const parsed = placeSchema.safeParse({
         id, name: place?.name, lat: place?.lat, lng: place?.lng, googleMapsUrl: place?.googleMapsUrl,
-        category, favorite, area: "", description: "", image: "", link: "", notes: "",
+        category, favorite, area: "", description: "", image: place?.image || "", photoCredit: place?.photoCredit, link: "", notes: "",
       });
       if (!parsed.success || !place?.googleMapsUrl) throw new Error("장소 이름과 정확한 위치를 확인할 수 없습니다. Google 지도에서 해당 장소의 공유 링크를 다시 복사해주세요.");
       setImported(parsed.data); setMapLink(place.googleMapsUrl);
+      setPhotoWarning(data.photoWarning || "");
     } catch (err) {
       setLinkError(err instanceof Error && !(err instanceof TypeError) ? err.message : "링크를 불러오지 못했습니다. 연결을 확인하고 다시 시도해주세요.");
     } finally { setImporting(false); }
@@ -60,7 +63,8 @@ function GooglePlaceAdd({ defaultCategory = "sight", onSave, onClose, busy, onAu
   return <Modal title="Google 지도로 장소 추가" onClose={onClose} busy={locked}>
     <EditorForm busy={locked} onSubmit={(e) => { e.preventDefault(); if (!locked && ready && imported) void submit({ ...imported, category, favorite }); }}>
       <div className="maps-link-import"><label>Google 지도 링크<div className="maps-link-row"><input ref={linkInput} type="url" required aria-label="Google 지도 링크" maxLength={2048} value={mapLink} onChange={(e) => { setMapLink(e.target.value); setImported(null); setLinkError(""); }} placeholder="https://maps.app.goo.gl/…" autoFocus onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void importLink(); } }} /><button type="button" className="button secondary" disabled={locked || !mapLink.trim()} onClick={() => void importLink()}>{importing ? <LoaderCircle size={16} className="spin" /> : <Link2 size={16} />}{importing ? "불러오는 중" : "불러오기"}</button></div></label><ErrorMessage error={linkError} /></div>
-      {ready && imported && <section className="maps-place-preview" aria-label="불러온 장소"><div className="maps-place-preview-heading"><h3>{imported.name}</h3><a className="button secondary" href={imported.googleMapsUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} />Google 지도</a></div><TripMap compact points={[{ place: imported, key: imported.id, order: 1 }]} selected={imported.id} onSelect={() => {}} /></section>}
+      {ready && imported && <section className="maps-place-preview" aria-label="불러온 장소"><div className="maps-place-preview-heading"><h3>{imported.name}</h3><a className="button secondary" href={imported.googleMapsUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} />Google 지도</a></div>{imported.image && <div className="import-photo"><PlaceImage src={imported.image} alt={imported.name} /></div>}<PhotoCredit credit={imported.photoCredit} /><TripMap compact points={[{ place: imported, key: imported.id, order: 1 }]} selected={imported.id} onSelect={() => {}} /></section>}
+      {ready && photoWarning && <p className="photo-warning" role="status">{photoWarning}</p>}
       <label>분류<select aria-label="분류" value={category} onChange={(e) => setCategory(e.target.value as Category)}>{Object.entries(categoryLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
       <label className="checkbox-label"><input type="checkbox" checked={favorite} onChange={(e) => setFavorite(e.target.checked)} />즐겨찾기에 저장</label>
       <ErrorMessage error={error} /><div className="form-actions"><button className="button secondary" type="button" onClick={onClose} disabled={locked}>취소</button><SubmitButton busy={busy} disabled={!ready || importing}>장소 등록</SubmitButton></div>
@@ -74,10 +78,12 @@ function ExistingPlaceEditor({ value, onSave, onClose, busy, onAuthRequired }: P
   const [importing, setImporting] = useState(false);
   const [linkError, setLinkError] = useState("");
   const [needsLocation, setNeedsLocation] = useState(false);
+  const [photoWarning, setPhotoWarning] = useState("");
+  const [photoFetching, setPhotoFetching] = useState(false);
   const original = useRef(value).current;
   const { error, submit } = useSave<Place>((edited) => onSave(edited, original));
   const update = <K extends keyof Place>(key: K, val: Place[K]) => {
-    setDraft((d) => ({ ...d, [key]: val }));
+    setDraft((d) => ({ ...d, [key]: val, ...(key === "image" ? { photoCredit: undefined } : {}), ...(["name", "lat", "lng"].includes(key) && d.image.startsWith("/api/place-photos/") ? { image: "", photoCredit: undefined } : {}) }));
     if (key === "lat" || key === "lng") { setNeedsLocation(false); setLinkError(""); }
   };
   function updateMapLink(link: string) {
@@ -98,26 +104,44 @@ function ExistingPlaceEditor({ value, onSave, onClose, busy, onAuthRequired }: P
       const data = await response.json();
       if (response.status === 401) onAuthRequired();
       if (!response.ok) throw new Error(data.error || "장소를 불러오지 못했습니다.");
-      const imported: GoogleMapsPlaceDraft = data.place;
+      const imported: ImportedPlace = data.place;
       const hasLocation = typeof imported.lat === "number" && typeof imported.lng === "number";
-      setDraft((current) => ({ ...current, ...(imported.name ? { name: imported.name } : {}), ...(hasLocation ? { lat: imported.lat!, lng: imported.lng! } : {}), googleMapsUrl: imported.googleMapsUrl }));
+      setDraft((current) => ({ ...current, ...(imported.name ? { name: imported.name } : {}), ...(hasLocation ? { lat: imported.lat!, lng: imported.lng! } : {}), googleMapsUrl: imported.googleMapsUrl, ...(!current.image || current.image.startsWith("/api/place-photos/") ? { image: imported.image || "", photoCredit: imported.photoCredit } : {}) }));
+      setPhotoWarning(data.photoWarning || "");
       setMapLink(imported.googleMapsUrl);
       setNeedsLocation(!hasLocation);
       if (!hasLocation) setLinkError("이 링크에는 정확한 장소 좌표가 없습니다. 지도에서 위치를 선택하거나 좌표를 확인해주세요.");
     } catch (err) { setLinkError(`${err instanceof Error && !(err instanceof TypeError) ? err.message : "링크를 불러오지 못했습니다. 연결을 확인하고 다시 시도해주세요."} 위치를 직접 확인하거나 링크를 지운 뒤 저장해주세요.`); }
     finally { setImporting(false); }
   }
-  const locked = busy || importing;
+  async function importPhoto() {
+    if (busy || importing || photoFetching) return;
+    setPhotoFetching(true); setPhotoWarning("");
+    try {
+      const response = await fetch("/api/place-photos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ place: { name: draft.name, lat: draft.lat, lng: draft.lng, googleMapsUrl: draft.googleMapsUrl } }) });
+      const result = await response.json();
+      if (response.status === 401) onAuthRequired();
+      if (!response.ok) throw new Error(result.error || "사진을 불러오지 못했습니다.");
+      if (result.photo) {
+        const updated = placeSchema.parse({ ...draft, ...result.photo });
+        setDraft(updated);
+      } else setPhotoWarning(result.warning || "이 장소의 사진을 찾지 못했습니다.");
+    } catch (error) { setPhotoWarning(error instanceof Error ? error.message : "사진을 불러오지 못했습니다."); }
+    finally { setPhotoFetching(false); }
+  }
+  const locked = busy || importing || photoFetching;
   const pendingLink = mapLink.trim() !== (draft.googleMapsUrl || "").trim();
   return <Modal title={value ? "장소 수정" : "새로운 장소"} onClose={onClose} busy={locked}>
     <EditorForm busy={locked} onSubmit={(e) => { e.preventDefault(); if (!locked && !needsLocation && !pendingLink) void submit(draft); }}>
       <div className="maps-link-import"><label>Google 지도 링크<div className="maps-link-row"><input type="url" aria-label="Google 지도 링크" maxLength={2048} value={mapLink} onChange={(e) => updateMapLink(e.target.value)} placeholder="https://maps.app.goo.gl/…" autoFocus={!value} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void importLink(); } }} /><button type="button" className="button secondary" disabled={locked || !mapLink.trim()} onClick={() => void importLink()}>{importing ? <LoaderCircle size={16} className="spin" /> : <Link2 size={16} />}{importing ? "불러오는 중" : "불러오기"}</button></div></label><ErrorMessage error={linkError} /></div>
       <label>장소 이름<input required maxLength={120} value={draft.name} onChange={(e) => update("name", e.target.value)} placeholder="가고 싶은 장소" autoFocus={!!value} /></label>
       <div className="form-row"><label>분류<select aria-label="분류" value={draft.category} onChange={(e) => update("category", e.target.value as Category)}>{Object.entries(categoryLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>지역<input maxLength={100} value={draft.area} onChange={(e) => update("area", e.target.value)} placeholder="나하, 차탄, 모토부" /></label></div>
-      <div className="map-field"><span>위치</span><TripMap compact points={[{ place: draft, key: draft.id, order: 1 }]} selected={draft.id} onSelect={() => {}} onPick={(lat, lng) => { if (!locked) { setDraft((d) => ({ ...d, lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)) })); setNeedsLocation(false); setLinkError(""); } }} /></div>
+      <div className="map-field"><span>위치</span><TripMap compact points={[{ place: draft, key: draft.id, order: 1 }]} selected={draft.id} onSelect={() => {}} onPick={(lat, lng) => { if (!locked) { setDraft((d) => ({ ...d, lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)), ...(d.image.startsWith("/api/place-photos/") ? { image: "", photoCredit: undefined } : {}) })); setNeedsLocation(false); setLinkError(""); } }} /></div>
       <div className="form-row"><label>위도<input type="number" required min={-90} max={90} step="any" value={draft.lat} onChange={(e) => update("lat", Number(e.target.value))} /></label><label>경도<input type="number" required min={-180} max={180} step="any" value={draft.lng} onChange={(e) => update("lng", Number(e.target.value))} /></label></div>
       <label>소개<textarea rows={2} maxLength={3000} value={draft.description} onChange={(e) => update("description", e.target.value)} placeholder="이곳에서 하고 싶은 것" /></label>
-      <label>사진 주소<input value={draft.image} onChange={(e) => update("image", e.target.value)} placeholder="https://…" maxLength={2048} /></label>
+      <label>사진 주소<div className="maps-link-row"><input value={draft.image} onChange={(e) => update("image", e.target.value)} placeholder="https://…" maxLength={2048} /><button type="button" className="button secondary" title="Google 사진 가져오기" aria-label="Google 사진 가져오기" disabled={locked || !!draft.image || needsLocation || pendingLink || !draft.googleMapsUrl} onClick={() => void importPhoto()}>{photoFetching ? <LoaderCircle size={16} className="spin" /> : <ImageDown size={16} />}</button></div></label>
+      {draft.image && <div className="import-photo"><PlaceImage src={draft.image} alt={draft.name} /></div>}<PhotoCredit credit={draft.image ? draft.photoCredit : undefined} />
+      {photoWarning && <p className="photo-warning" role="status">{photoWarning}</p>}
       <label>예약·공식 사이트<input type="url" value={draft.link} onChange={(e) => update("link", e.target.value)} placeholder="https://…" maxLength={2048} /></label>
       <label>개인 메모<textarea rows={2} value={draft.notes} onChange={(e) => update("notes", e.target.value)} maxLength={3000} placeholder="예약, 주차, 사진 구도 등" /></label>
       <label className="checkbox-label"><input type="checkbox" checked={draft.favorite} onChange={(e) => update("favorite", e.target.checked)} />즐겨찾기에 저장</label>
@@ -171,7 +195,7 @@ export function TripEditor({ value, onSave, onClose, busy }: Common & { value: T
 
 export function PlaceDetail({ place, onClose, onEdit, onSchedule, onDelete }: { place: Place; onClose: () => void; onEdit: () => void; onSchedule: () => void; onDelete: () => void }) {
   return <Modal title={place.name} onClose={onClose}>
-    <div className="place-detail"><PlaceImage src={place.image} alt={place.name} /><div className="detail-meta"><CategoryBadge category={place.category} /><span><MapPin size={14} />{place.area || "오키나와"}</span></div><p>{place.description || "아직 소개가 없습니다."}</p>{place.notes && <div className="detail-note"><h3>우리 가족 메모</h3><p>{place.notes}</p></div>}<NavigationControls place={place} /><div className="detail-links"><a href={place.googleMapsUrl || mapsUrl(place)} target="_blank" rel="noopener noreferrer" className="button secondary"><MapPin size={15} />Google 지도</a>{place.link && <a href={place.link} target="_blank" rel="noopener noreferrer" className="button secondary"><ExternalLink size={15} />예약·공식 사이트</a>}</div><div className="form-actions"><button type="button" className="button danger-text" onClick={onDelete}><Trash2 size={16} />삭제</button><button type="button" className="button secondary" onClick={onEdit}>수정</button><button type="button" className="button primary" onClick={onSchedule}><Plus size={16} />일정에 추가</button></div></div>
+    <div className="place-detail"><PlaceImage src={place.image} alt={place.name} /><PhotoCredit credit={place.image ? place.photoCredit : undefined} /><div className="detail-meta"><CategoryBadge category={place.category} /><span><MapPin size={14} />{place.area || "오키나와"}</span></div><p>{place.description || "아직 소개가 없습니다."}</p>{place.notes && <div className="detail-note"><h3>우리 가족 메모</h3><p>{place.notes}</p></div>}<NavigationControls place={place} /><div className="detail-links"><a href={place.googleMapsUrl || mapsUrl(place)} target="_blank" rel="noopener noreferrer" className="button secondary"><MapPin size={15} />Google 지도</a>{place.link && <a href={place.link} target="_blank" rel="noopener noreferrer" className="button secondary"><ExternalLink size={15} />예약·공식 사이트</a>}</div><div className="form-actions"><button type="button" className="button danger-text" onClick={onDelete}><Trash2 size={16} />삭제</button><button type="button" className="button secondary" onClick={onEdit}>수정</button><button type="button" className="button primary" onClick={onSchedule}><Plus size={16} />일정에 추가</button></div></div>
   </Modal>;
 }
 

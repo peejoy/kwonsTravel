@@ -36,8 +36,13 @@ export function NavigationControls({ place }: { place: Place }) {
   const modes = [{ id: "driving", label: "자동차", icon: Car }, { id: "walking", label: "도보", icon: Footprints }, { id: "transit", label: "대중교통", icon: TramFront }] as const;
   return <div className="navigation-controls"><div className="segmented travel-modes" role="group" aria-label="이동 수단">{modes.map(({ id, label, icon: Icon }) => <button type="button" key={id} className={mode === id ? "active" : ""} aria-pressed={mode === id} onClick={() => setMode(id)}><Icon size={15} />{label}</button>)}</div><NavigationLink place={place} mode={mode} className="button primary" /></div>;
 }
-export function PlaceImage({ src, alt, className = "" }: { src: string; alt: string; className?: string }) {
+export function PhotoCredit({ credit }: { credit?: Place["photoCredit"] }) {
+  if (!credit) return null;
+  return <div className="photo-credit"><a href={credit.sourceUrl} target="_blank" rel="noopener noreferrer" translate="no">Google Maps</a>{credit.authors.map((author, index) => author.uri ? <a key={index} href={author.uri} target="_blank" rel="noopener noreferrer">{author.displayName}</a> : <span key={index}>{author.displayName}</span>)}</div>;
+}
+export function PlaceImage({ src, alt, className = "", credit }: { src: string; alt: string; className?: string; credit?: Place["photoCredit"] }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => { setFailed(false); }, [src]);
-  return src && !failed ? <img className={`place-image ${className}`} src={src} alt={alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} /> : <div className={`place-image image-placeholder ${className}`} aria-label={`${alt} 사진 없음`}><MapPin size={26} strokeWidth={1.3} /></div>;
+  const image = <img className={`place-image ${className}`} src={src} alt={alt} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />;
+  return src && !failed ? credit ? <span className="attributed-photo">{image}<span className="photo-source-label" translate="no">Google Maps</span></span> : image : <div className={`place-image image-placeholder ${className}`} aria-label={`${alt} 사진 없음`}><MapPin size={26} strokeWidth={1.3} /></div>;
 }
